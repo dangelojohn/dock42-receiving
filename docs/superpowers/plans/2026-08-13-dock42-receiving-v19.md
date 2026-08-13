@@ -1661,9 +1661,18 @@ at `/dock42`, so update the cache list to match:
 ```js
 const ASSETS_TO_CACHE = [
   '/dock42',
-  '/manifest.json',
 ];
 ```
+**Drop `/manifest.json` entirely rather than pointing it at a path under
+`/dock42_receiving/static/src/pwa/` (found by this task's own review):**
+`cache.addAll()` is atomic — every URL in the list must succeed or the
+whole `install` event fails, and `manifest.json` isn't served at any
+root-level route Odoo registers (only `/dock42` and `/dock42/api/*`
+exist). Since `manifest.json` is already linked from the built
+`index.html` and gets caught by the fetch handler's normal cache-on-first-
+request logic below, it doesn't need to be pre-cached by name — leaving it
+in this list with any path is one more thing that can break `install`
+atomically for no real benefit.
 
 - [ ] **Step 4: Add `.gitignore` for build output**
 
