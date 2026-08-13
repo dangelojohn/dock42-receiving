@@ -568,7 +568,10 @@ class Dock42PWA(http.Controller):
     def update_shelf(self, package_id=None, shelf_location=None, photo_shelf=None, **kw):
         if not _is_operator():
             raise AccessError('Please sign in with an operator account.')
-        record = request.env['dock42.package'].browse(int(package_id))
+        try:
+            record = request.env['dock42.package'].browse(int(package_id))
+        except (TypeError, ValueError):
+            return {'ok': False}
         if not record.exists():
             return {'ok': False}
         return record.pwa_add_shelf(shelf_location, photo_shelf)
@@ -577,7 +580,10 @@ class Dock42PWA(http.Controller):
     def flag_damage(self, package_id=None, **kw):
         if not _is_operator():
             raise AccessError('Please sign in with an operator account.')
-        record = request.env['dock42.package'].browse(int(package_id))
+        try:
+            record = request.env['dock42.package'].browse(int(package_id))
+        except (TypeError, ValueError):
+            return {'ok': False}
         if not record.exists():
             return {'ok': False}
         return record.pwa_toggle_flag()
