@@ -1,0 +1,6 @@
+<odoo>
+    <record id="dock42_gemini_api_key_default" model="ir.config_parameter">
+        <field name="key">dock42_receiving.gemini_api_key</field>
+        <field name="value"></field>
+    </record>
+</odoo>

@@ -6,9 +6,10 @@
     'depends': ['base', 'web', 'mail'],
     'data': [
         'security/ir.model.access.csv',
+        'data/ir_config_parameter.xml',
     ],
     'external_dependencies': {
-        'python': ['google-genai'],
+        'python': ['google-genai', 'pydantic'],
     },
     'installable': True,
     'application': True,
