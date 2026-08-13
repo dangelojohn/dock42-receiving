@@ -5,8 +5,6 @@
     'category': 'Inventory/Inventory',
     'depends': ['base', 'web'],
     'data': [
-        'security/ir.model.access.csv',
-        'data/ir_config_parameter.xml',
     ],
     'external_dependencies': {
         'python': ['google-genai'],
