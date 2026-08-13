@@ -30,3 +30,47 @@ class TestDock42Controllers(HttpCase):
         self.assertEqual(res.status_code, 200)
         body = res.json()
         self.assertFalse(body['result']['duplicate'])
+
+    def test_update_shelf_with_missing_package_id_returns_ok_false(self):
+        self.authenticate('admin', 'admin')
+        res = self.url_open(
+            '/dock42/api/update_shelf',
+            data='{"jsonrpc":"2.0","method":"call","params":{"shelf_location":"BAY-01"}}',
+            headers={'Content-Type': 'application/json'},
+        )
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertFalse(body['result']['ok'])
+
+    def test_update_shelf_with_non_numeric_package_id_returns_ok_false(self):
+        self.authenticate('admin', 'admin')
+        res = self.url_open(
+            '/dock42/api/update_shelf',
+            data='{"jsonrpc":"2.0","method":"call","params":{"package_id":"invalid-uuid","shelf_location":"BAY-01"}}',
+            headers={'Content-Type': 'application/json'},
+        )
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertFalse(body['result']['ok'])
+
+    def test_flag_damage_with_missing_package_id_returns_ok_false(self):
+        self.authenticate('admin', 'admin')
+        res = self.url_open(
+            '/dock42/api/flag_damage',
+            data='{"jsonrpc":"2.0","method":"call","params":{}}',
+            headers={'Content-Type': 'application/json'},
+        )
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertFalse(body['result']['ok'])
+
+    def test_flag_damage_with_non_numeric_package_id_returns_ok_false(self):
+        self.authenticate('admin', 'admin')
+        res = self.url_open(
+            '/dock42/api/flag_damage',
+            data='{"jsonrpc":"2.0","method":"call","params":{"package_id":"not-a-number"}}',
+            headers={'Content-Type': 'application/json'},
+        )
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertFalse(body['result']['ok'])
