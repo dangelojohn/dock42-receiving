@@ -44,8 +44,6 @@
     'category': 'Inventory/Inventory',
     'depends': ['base', 'web'],
     'data': [
-        'security/ir.model.access.csv',
-        'data/ir_config_parameter.xml',
     ],
     'external_dependencies': {
         'python': ['google-genai'],
@@ -55,6 +53,19 @@
     'license': 'LGPL-3',
 }
 ```
+
+**Sequencing note:** `data` starts empty. Task 2 adds
+`'security/ir.model.access.csv'` to this list in the same commit that
+creates that file. Task 5 adds `'data/ir_config_parameter.xml'` to this
+list in the same commit that creates that file. Do not list a data file
+here before the task that creates it — Tasks 1 through 4 each run a real
+`-i dock42_receiving` install as part of their own verification, and a
+manifest referencing a file that doesn't exist yet fails installation with
+`FileNotFoundError`, not a graceful skip. (This note was added after Task
+1's own review surfaced the bug directly against a real install; it is
+already correctly reflected in the actual committed code as of Tasks 1-2 —
+this edit just brings the plan document itself back in sync after an
+earlier uncommitted copy of this same fix was lost.)
 
 - [ ] **Step 2: Create empty `__init__.py` files**
 
@@ -82,12 +93,8 @@ Run (adjust `odoo-bin` path and `-d` database name to your v19 CE instance):
 ```bash
 odoo-bin -d dock42_test -i dock42_receiving --stop-after-init
 ```
-Expected: process exits 0, no traceback. It will fail at this point because
-`security/ir.model.access.csv` and `data/ir_config_parameter.xml` are
-referenced in the manifest but don't exist yet — that's expected; those are
-created in Tasks 2 and 5. If you want a green install before those exist,
-temporarily comment out the two lines under `'data'` in the manifest, verify
-install succeeds, then uncomment before Task 2.
+Expected: process exits 0, no traceback. With `data: []` empty, this
+install has nothing to fail on and should succeed cleanly.
 
 - [ ] **Step 4: Commit**
 
@@ -275,12 +282,22 @@ class Dock42Package(models.Model):
         return {'id': record.id, 'duplicate': False}
 ```
 
-- [ ] **Step 4: Create the ACL file (required for the model to be usable)**
+- [ ] **Step 4: Create the ACL file and register it in the manifest (required for the model to be usable)**
 
 ```csv
 # dock42_receiving/security/ir.model.access.csv
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_dock42_package_user,dock42.package.user,model_dock42_package,base.group_user,1,1,1,0
+```
+
+Task 1 shipped `__manifest__.py` with an empty `'data': []` list
+deliberately — this file didn't exist yet at that point. Update the
+manifest now that it does:
+
+```python
+    'data': [
+        'security/ir.model.access.csv',
+    ],
 ```
 
 - [ ] **Step 5: Run test to verify it passes**
@@ -296,6 +313,7 @@ Expected: PASS — 3 tests, 0 failures.
 ```bash
 git add dock42_receiving/models/dock42_package.py \
   dock42_receiving/security/ir.model.access.csv \
+  dock42_receiving/__manifest__.py \
   dock42_receiving/tests/test_dock42_package.py
 git commit -m "dock42_receiving: idempotent dock42.package model (v19 models.Constraint)"
 ```
@@ -675,7 +693,7 @@ odoo-bin -d dock42_test -i dock42_receiving --test-enable \
 ```
 Expected: FAIL — 404, route doesn't exist yet.
 
-- [ ] **Step 3: Add the config parameter default**
+- [ ] **Step 3: Add the config parameter default and register it in the manifest**
 
 ```xml
 <!-- dock42_receiving/data/ir_config_parameter.xml -->
@@ -685,6 +703,16 @@ Expected: FAIL — 404, route doesn't exist yet.
         <field name="value"></field>
     </record>
 </odoo>
+```
+
+Add this file to the manifest's `data` list (which currently holds only
+`'security/ir.model.access.csv'` from Task 2):
+
+```python
+    'data': [
+        'security/ir.model.access.csv',
+        'data/ir_config_parameter.xml',
+    ],
 ```
 
 - [ ] **Step 4: Add the vision-scan controller method**
@@ -786,7 +814,7 @@ required for this task.)
 
 ```bash
 git add dock42_receiving/controllers/main.py dock42_receiving/data/ir_config_parameter.xml \
-  dock42_receiving/tests/test_dock42_scan_label.py
+  dock42_receiving/__manifest__.py dock42_receiving/tests/test_dock42_scan_label.py
 git commit -m "dock42_receiving: server-side Gemini vision scan, real error handling"
 ```
 
