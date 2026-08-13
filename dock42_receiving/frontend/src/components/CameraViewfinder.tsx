@@ -17,6 +17,7 @@ export const CameraViewfinder = forwardRef<CameraViewfinderHandle, CameraViewfin
 }, ref) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const isCapturingRef = useRef(false);
   const [useRealCamera, setUseRealCamera] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [torchOn, setTorchOn] = useState<boolean>(false);
@@ -59,57 +60,61 @@ export const CameraViewfinder = forwardRef<CameraViewfinderHandle, CameraViewfin
 
   // Trigger snapshot or AI Label Scan
   const handleTriggerScan = async () => {
-    if (isScanningAI) return;
+    if (isCapturingRef.current) return;
+    isCapturingRef.current = true;
+    try {
+      let imageBase64: string | undefined = undefined;
 
-    let imageBase64: string | undefined = undefined;
+      // Capture frame from real video if active
+      if (useRealCamera && videoRef.current) {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = videoRef.current.videoWidth || 640;
+          canvas.height = videoRef.current.videoHeight || 480;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+            imageBase64 = canvas.toDataURL('image/jpeg', 0.8);
+          }
+        } catch (e) {
+          console.warn('Canvas capture error:', e);
+        }
+      }
 
-    // Capture frame from real video if active
-    if (useRealCamera && videoRef.current) {
+      // Call server AI scanner endpoint `/api/scan-label`
       try {
-        const canvas = document.createElement('canvas');
-        canvas.width = videoRef.current.videoWidth || 640;
-        canvas.height = videoRef.current.videoHeight || 480;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-          imageBase64 = canvas.toDataURL('image/jpeg', 0.8);
+        const res = await fetch('/api/scan-label', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            imageBase64: imageBase64 || null,
+            manualPrompt: 'Scan warehouse package label at Dock 42',
+          }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          setLastScannedBanner(`Scanned ${data.packageId} - ${data.itemName}`);
+          setTimeout(() => setLastScannedBanner(null), 4000);
+          onCaptureScan({
+            id: data.packageId,
+            poNumber: data.poNumber,
+            vendor: data.vendor,
+            itemName: data.itemName,
+            weightKg: data.weightKg,
+            shelfLocation: data.shelfLocation,
+            status: data.isDamaged ? 'DAMAGED' : 'SHELF_PENDING',
+            notes: data.notes,
+          });
         }
       } catch (e) {
-        console.warn('Canvas capture error:', e);
-      }
-    }
-
-    // Call server AI scanner endpoint `/api/scan-label`
-    try {
-      const res = await fetch('/api/scan-label', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageBase64: imageBase64 || null,
-          manualPrompt: 'Scan warehouse package label at Dock 42',
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setLastScannedBanner(`Scanned ${data.packageId} - ${data.itemName}`);
+        // Fallback local mock scan
+        const mockId = `PR-${Math.floor(1000 + Math.random() * 9000)}`;
+        setLastScannedBanner(`Captured ${mockId} (Offline Scan)`);
         setTimeout(() => setLastScannedBanner(null), 4000);
-        onCaptureScan({
-          id: data.packageId,
-          poNumber: data.poNumber,
-          vendor: data.vendor,
-          itemName: data.itemName,
-          weightKg: data.weightKg,
-          shelfLocation: data.shelfLocation,
-          status: data.isDamaged ? 'DAMAGED' : 'SHELF_PENDING',
-          notes: data.notes,
-        });
+        onCaptureScan({ id: mockId });
       }
-    } catch (e) {
-      // Fallback local mock scan
-      const mockId = `PR-${Math.floor(1000 + Math.random() * 9000)}`;
-      setLastScannedBanner(`Captured ${mockId} (Offline Scan)`);
-      setTimeout(() => setLastScannedBanner(null), 4000);
-      onCaptureScan({ id: mockId });
+    } finally {
+      isCapturingRef.current = false;
     }
   };
 
