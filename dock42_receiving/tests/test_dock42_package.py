@@ -111,3 +111,39 @@ class TestDock42PackageCapture(TransactionCase):
         # — prove it by making another ORM call right after.
         count = Package.search_count([('capture_uuid', '=', 'uuid-race')])
         self.assertEqual(count, 1)
+
+    def test_add_shelf_persists_and_marks_stored(self):
+        Package = self.env['dock42.package']
+        created = Package.pwa_create_capture({
+            'capture_uuid': 'uuid-shelf-1', 'vendor': 'Acme', 'item_name': 'Widget',
+        })
+        record = Package.browse(created['id'])
+        result = record.pwa_add_shelf('BAY-04-A2')
+        self.assertTrue(result['ok'])
+        self.assertEqual(record.shelf_location, 'BAY-04-A2')
+        self.assertEqual(record.state, 'stored')
+
+    def test_toggle_flag_sets_and_clears_damaged_state(self):
+        Package = self.env['dock42.package']
+        created = Package.pwa_create_capture({
+            'capture_uuid': 'uuid-flag-1', 'vendor': 'Acme', 'item_name': 'Widget',
+        })
+        record = Package.browse(created['id'])
+        first = record.pwa_toggle_flag()
+        self.assertTrue(first['ok'])
+        self.assertTrue(first['flagged'])
+        self.assertEqual(record.state, 'damaged')
+
+        second = record.pwa_toggle_flag()
+        self.assertFalse(second['flagged'])
+        self.assertEqual(record.state, 'stored')
+
+    def test_feed_returns_recent_captures_newest_first(self):
+        Package = self.env['dock42.package']
+        Package.pwa_create_capture({'capture_uuid': 'uuid-feed-1', 'vendor': 'A', 'item_name': 'First'})
+        Package.pwa_create_capture({'capture_uuid': 'uuid-feed-2', 'vendor': 'B', 'item_name': 'Second'})
+        feed = Package.pwa_feed(limit=2)
+        self.assertEqual(len(feed), 2)
+        self.assertEqual(feed[0]['item_name'], 'Second')
+        self.assertIn('vendor', feed[0])
+        self.assertIn('state', feed[0])

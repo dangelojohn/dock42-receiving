@@ -109,3 +109,40 @@ class Dock42Package(models.Model):
 
         record.message_post(body='Captured via Dock 42 PWA by %s.' % self.env.user.name)
         return {'id': record.id, 'duplicate': False}
+
+    def pwa_add_shelf(self, shelf_location, photo_shelf=None):
+        """Assign/confirm the shelf bin for this record, mark it stored."""
+        self.ensure_one()
+        vals = {'state': 'stored', 'shelf_location': shelf_location}
+        if photo_shelf:
+            vals['photo_shelf'] = self._strip_b64(photo_shelf)
+        self.write(vals)
+        self.message_post(body='Shelf bin updated via Dock 42 PWA by %s.' % self.env.user.name)
+        return {'ok': True}
+
+    def pwa_toggle_flag(self):
+        """Toggle the damaged state on this record."""
+        self.ensure_one()
+        new_state = 'stored' if self.state == 'damaged' else 'damaged'
+        self.state = new_state
+        flagged = new_state == 'damaged'
+        if flagged:
+            self.message_post(body='Flagged damaged via Dock 42 PWA by %s.' % self.env.user.name)
+        else:
+            self.message_post(body='Damage flag cleared by %s.' % self.env.user.name)
+        return {'ok': True, 'flagged': flagged}
+
+    @api.model
+    def pwa_feed(self, limit=25):
+        """Return recent packages (newest first) for the PWA feed."""
+        records = self.search([], order='create_date desc, id desc', limit=int(limit or 25))
+        return [{
+            'id': r.id,
+            'po_number': r.po_number or '',
+            'vendor': r.vendor or '',
+            'item_name': r.item_name or '',
+            'weight_kg': r.weight_kg,
+            'shelf_location': r.shelf_location or '',
+            'state': r.state,
+            'captured_by': r.captured_by.name if r.captured_by else '',
+        } for r in records]
