@@ -25,6 +25,30 @@ class TestDock42ScanLabel(HttpCase):
             self.assertIn('error', result)
 
     @patch('odoo.addons.dock42_receiving.controllers.main._call_gemini_vision')
+    def test_scan_label_without_image_returns_error_without_calling_gemini(self, mock_call):
+        # Guards against the "no image" variant of the fabrication bug: if
+        # the guard were missing (or misplaced after the Gemini call), a
+        # well-formed-but-invented model response would sail through
+        # Pydantic validation and come back as success:True. Asserting
+        # mock_call was never invoked proves the route short-circuits
+        # before reaching Gemini at all, not merely that the final JSON
+        # happens to look right.
+        self.env['ir.config_parameter'].sudo().set_param(
+            'dock42_receiving.gemini_api_key', 'fake-key-for-test')
+        self.authenticate('admin', 'admin')
+        res = self.url_open(
+            '/dock42/api/scan-label',
+            data='{"jsonrpc":"2.0","method":"call","params":{}}',
+            headers={'Content-Type': 'application/json'},
+        )
+        body = res.json()
+        result = body.get('result', body.get('error'))
+        self.assertIsInstance(result, dict)
+        self.assertFalse(result.get('success', False))
+        self.assertIn('error', result)
+        mock_call.assert_not_called()
+
+    @patch('odoo.addons.dock42_receiving.controllers.main._call_gemini_vision')
     def test_scan_label_with_mocked_success(self, mock_call):
         mock_call.return_value = {
             'vendor': 'Acme Fasteners', 'item_name': 'Roller Bearings',

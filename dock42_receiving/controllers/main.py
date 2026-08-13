@@ -114,6 +114,15 @@ class Dock42PWA(http.Controller):
         if not _is_operator():
             raise AccessError('Please sign in with an operator account.')
 
+        if not image_base64:
+            # Without a real photo, a well-formed model response is
+            # ungrounded guesswork, not a scan — this is the same class of
+            # bug (success:True on fabricated data) this task exists to
+            # eliminate, just triggered by a missing image instead of an
+            # API failure. Require an image rather than letting the model
+            # invent a plausible-looking label from a text-only prompt.
+            return {'success': False, 'error': 'No image provided — a photo of the label is required to scan.'}
+
         api_key = request.env['ir.config_parameter'].sudo().get_param(
             'dock42_receiving.gemini_api_key')
         if not api_key:
