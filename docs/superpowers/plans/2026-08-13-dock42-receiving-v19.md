@@ -703,13 +703,17 @@ Expected: FAIL — 404, route doesn't exist yet.
 
 ```xml
 <!-- dock42_receiving/data/ir_config_parameter.xml -->
-<odoo>
+<odoo noupdate="1">
     <record id="dock42_gemini_api_key_default" model="ir.config_parameter">
         <field name="key">dock42_receiving.gemini_api_key</field>
         <field name="value"></field>
     </record>
 </odoo>
 ```
+`noupdate="1"` is required, not optional: `ir.config_parameter.set_param()`
+reuses this same xmlid-tracked row, so without it a future `-u
+dock42_receiving` re-applies this file and silently wipes an
+admin-configured API key back to empty.
 
 Add this file to the manifest's `data` list (which currently holds only
 `'security/ir.model.access.csv'` from Task 2):
@@ -781,6 +785,15 @@ Add the route inside the `Dock42PWA` class:
     def scan_label(self, image_base64=None, mime_type='image/jpeg', **kw):
         if not _is_operator():
             raise AccessError('Please sign in with an operator account.')
+
+        if not image_base64:
+            # Without a real photo, a well-formed model response is
+            # ungrounded guesswork, not a scan — this is the same class of
+            # bug (success:True on fabricated data) this task exists to
+            # eliminate, just triggered by a missing image instead of an
+            # API failure. Require an image rather than letting the model
+            # invent a plausible-looking label from a text-only prompt.
+            return {'success': False, 'error': 'No image provided — a photo of the label is required to scan.'}
 
         api_key = request.env['ir.config_parameter'].sudo().get_param(
             'dock42_receiving.gemini_api_key')
