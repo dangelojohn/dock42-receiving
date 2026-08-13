@@ -132,32 +132,37 @@ export const CameraViewfinder = forwardRef<CameraViewfinderHandle, CameraViewfin
     reader.onload = async () => {
       const base64 = reader.result as string;
       try {
-        const res = await fetch('/api/scan-label', {
+        const res = await fetch('/dock42/api/scan-label', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            imageBase64: base64,
-            mimeType: file.type,
+            jsonrpc: '2.0', method: 'call',
+            params: {
+              image_base64: base64.replace(/^data:image\/\w+;base64,/, ''),
+              mime_type: file.type,
+            },
           }),
         });
-        const data = await res.json();
-        if (data.success) {
-          setLastScannedBanner(`AI OCR extracted ${data.packageId} (${data.vendor})`);
+        const body = await res.json();
+        const data = body.result;
+        if (data?.success) {
+          setLastScannedBanner(`AI OCR extracted (${data.vendor})`);
           setTimeout(() => setLastScannedBanner(null), 4000);
           onCaptureScan({
-            id: data.packageId,
-            poNumber: data.poNumber,
+            poNumber: data.po_number,
             vendor: data.vendor,
-            itemName: data.itemName,
-            weightKg: data.weightKg,
-            shelfLocation: data.shelfLocation,
-            status: data.isDamaged ? 'DAMAGED' : 'SHELF_PENDING',
+            itemName: data.item_name,
+            weightKg: data.weight_kg,
+            shelfLocation: data.shelf_location,
+            status: data.is_damaged ? 'DAMAGED' : 'SHELF_PENDING',
             imageUrl: base64,
             notes: data.notes,
           });
+        } else {
+          setCameraError(data?.error || 'Scan failed.');
         }
       } catch (err) {
-        onCaptureScan();
+        setCameraError('Scan request failed: ' + err);
       }
     };
     reader.readAsDataURL(file);

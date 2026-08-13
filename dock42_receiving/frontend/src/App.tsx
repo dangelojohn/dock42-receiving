@@ -58,9 +58,12 @@ export default function App() {
   // Pull the package feed from Odoo — this is now the single source of
   // truth for `packages`, rather than a locally-constructed record that
   // could drift from what the server actually stored.
-  const refreshFeed = async () => {
+  // Returns the mapped list so callers that also need to re-sync a
+  // separately-held snapshot (selectedPackage) don't have to read `packages`
+  // back out of a stale closure right after calling setPackages.
+  const refreshFeed = async (): Promise<PackageItem[]> => {
     const feed = await odooCall<any[]>('/dock42/api/feed', { limit: 50 });
-    setPackages(feed.map((r) => ({
+    const mapped: PackageItem[] = feed.map((r) => ({
       id: String(r.id),
       poNumber: r.po_number,
       vendor: r.vendor,
@@ -75,7 +78,9 @@ export default function App() {
       shelfAssigned: r.state === 'stored',
       odooSynced: true,
       dockLocation: currentLocation.name,
-    })));
+    }));
+    setPackages(mapped);
+    return mapped;
   };
 
   // Manually re-pull the latest state from Odoo. Bound to the "SYNC NOW" /
@@ -179,13 +184,25 @@ export default function App() {
       package_id: Number(pkgId),
       shelf_location: newShelf,
     });
-    await refreshFeed();
+    const fresh = await refreshFeed();
+    // Re-sync the open modal's snapshot, not just the list behind it — the
+    // original handlers (pre-Task-7) kept selectedPackage in sync; the
+    // rewrite above dropped that, leaving the modal showing a stale
+    // status/shelf value until closed and reopened (found by Task 7's own
+    // review). PackageDetailModal is keyed only by id, so it won't remount
+    // on its own just because the object's contents changed underneath it.
+    setSelectedPackage((prev) =>
+      prev && prev.id === pkgId ? fresh.find((p) => p.id === pkgId) ?? prev : prev
+    );
   };
 
   // Toggle damage flag on package — actually persisted
   const handleToggleDamage = async (pkgId: string) => {
     await odooCall('/dock42/api/flag_damage', { package_id: Number(pkgId) });
-    await refreshFeed();
+    const fresh = await refreshFeed();
+    setSelectedPackage((prev) =>
+      prev && prev.id === pkgId ? fresh.find((p) => p.id === pkgId) ?? prev : prev
+    );
   };
 
   // Flag damaged shipment from FlagView
