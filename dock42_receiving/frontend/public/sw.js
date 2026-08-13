@@ -2,7 +2,6 @@
 const CACHE_NAME = 'dock42-v1.0.0';
 const ASSETS_TO_CACHE = [
   '/dock42',
-  '/manifest.json',
 ];
 
 // Install Event
