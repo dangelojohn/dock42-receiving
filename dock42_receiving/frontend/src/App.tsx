@@ -17,7 +17,6 @@ import {
   CaptureStep,
   DockLocation,
   OdooConfig,
-  OfflineQueueItem,
 } from './types';
 import {
   INITIAL_PACKAGES,
@@ -27,12 +26,14 @@ import {
 import {
   getStoredPackages,
   savePackagesToLocal,
-  getOfflineQueue,
-  addToOfflineQueue,
-  clearOfflineQueue,
   registerServiceWorker,
   triggerLocalPushNotification,
 } from './utils/indexedDB';
+import { odooCall } from './utils/odooRpc';
+
+function generateUuid(): string {
+  return crypto.randomUUID();
+}
 
 export default function App() {
   const [packages, setPackages] = useState<PackageItem[]>(() =>
@@ -47,9 +48,6 @@ export default function App() {
   const [isOnline, setIsOnline] = useState<boolean>(true);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [isScanningAI, setIsScanningAI] = useState<boolean>(false);
-  const [offlineQueue, setOfflineQueue] = useState<OfflineQueueItem[]>(() =>
-    getOfflineQueue()
-  );
   const [selectedPackage, setSelectedPackage] = useState<PackageItem | null>(
     null
   );
@@ -57,12 +55,58 @@ export default function App() {
   const [odooConfig, setOdooConfig] = useState<OdooConfig>(DEFAULT_ODOO_CONFIG);
   const cameraRef = React.useRef<CameraViewfinderHandle>(null);
 
-  // Mount service worker on startup
+  // Pull the package feed from Odoo — this is now the single source of
+  // truth for `packages`, rather than a locally-constructed record that
+  // could drift from what the server actually stored.
+  const refreshFeed = async () => {
+    const feed = await odooCall<any[]>('/dock42/api/feed', { limit: 50 });
+    setPackages(feed.map((r) => ({
+      id: String(r.id),
+      poNumber: r.po_number,
+      vendor: r.vendor,
+      itemName: r.item_name,
+      weightKg: r.weight_kg,
+      timeReceived: '',
+      dateReceived: '',
+      status: r.state === 'stored' ? 'STORED' : r.state === 'damaged' ? 'DAMAGED' : 'SHELF_PENDING',
+      shelfLocation: r.shelf_location,
+      labelScanned: true,
+      packageCaptured: true,
+      shelfAssigned: r.state === 'stored',
+      odooSynced: true,
+      dockLocation: currentLocation.name,
+    })));
+  };
+
+  // Manually re-pull the latest state from Odoo. Bound to the "SYNC NOW" /
+  // "TRIGGER FORCE BACKGROUND DATA SYNC" controls in SyncBar/SyncView —
+  // there's no local offline queue to flush anymore, so this just refreshes
+  // from server truth.
+  const handleManualRefresh = async () => {
+    if (isSyncing) return;
+    setIsSyncing(true);
+    try {
+      await refreshFeed();
+      setOdooConfig((prev) => ({
+        ...prev,
+        lastSyncTime: `Today at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+      }));
+    } catch (e) {
+      console.warn('Refresh failed:', e);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // Mount service worker & pull the initial feed from Odoo on startup
   useEffect(() => {
     registerServiceWorker();
+    refreshFeed().catch((e) => console.warn('Initial feed load failed:', e));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Save packages to local storage whenever updated
+  // Save packages to local storage whenever updated (client-side cache only;
+  // refreshFeed() from the server remains the source of truth)
   useEffect(() => {
     savePackagesToLocal(packages);
   }, [packages]);
@@ -81,168 +125,67 @@ export default function App() {
     };
   }, []);
 
-  // Force background data sync function
-  const handleForceSync = async () => {
-    if (isSyncing) return;
-    setIsSyncing(true);
-
-    try {
-      const res = await fetch('/api/odoo-sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          queueItems: offlineQueue,
-          odooEndpoint: odooConfig.hostUrl,
-        }),
-      });
-      const data = await res.json();
-
-      if (data.success) {
-        clearOfflineQueue();
-        setOfflineQueue([]);
-        // Mark all local packages as synced
-        setPackages((prev) =>
-          prev.map((p) => ({ ...p, odooSynced: true }))
-        );
-        setOdooConfig((prev) => ({
-          ...prev,
-          lastSyncTime: `Today at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-        }));
-      }
-    } catch (e) {
-      console.warn('Sync error:', e);
-    } finally {
-      setTimeout(() => setIsSyncing(false), 1200);
-    }
-  };
-
   // Handle barcode/package scan capture
   const handleCaptureScan = async (scannedData?: Partial<PackageItem>) => {
     setIsScanningAI(true);
-
-    const nowTime = new Date().toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    });
-
-    const newPkg: PackageItem = {
-      id: scannedData?.id || `PR-${Math.floor(1000 + Math.random() * 9000)}`,
-      poNumber: scannedData?.poNumber || `PO-2026-${Math.floor(100 + Math.random() * 900)}`,
-      vendor: scannedData?.vendor || 'Industrial Logistics Corp',
-      itemName: scannedData?.itemName || 'Heavy Duty Replacement Parts',
-      weightKg: scannedData?.weightKg ?? 15.2,
-      timeReceived: nowTime,
-      dateReceived: new Date().toISOString().split('T')[0],
-      status: scannedData?.status || 'SHELF_PENDING',
-      shelfLocation: scannedData?.shelfLocation || `BAY-01-A${Math.floor(1 + Math.random() * 9)}`,
-      labelScanned: true,
-      packageCaptured: true,
-      shelfAssigned: false,
-      imageUrl: scannedData?.imageUrl || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&w=600&q=80',
-      notes: scannedData?.notes || 'Scanned at DOCK-42 camera station',
-      odooPickingRef: `WH/IN/${Math.floor(10000 + Math.random() * 90000)}`,
-      odooSynced: isOnline,
-      dockLocation: currentLocation.name,
-    };
-
-    setPackages((prev) => [newPkg, ...prev]);
-
-    // Add to offline queue if offline
-    if (!isOnline) {
-      const qItem: OfflineQueueItem = {
-        id: `q-${Date.now()}`,
-        type: 'NEW_PACKAGE',
-        timestamp: new Date().toISOString(),
-        data: newPkg,
-        status: 'PENDING',
-        retryCount: 0,
-      };
-      addToOfflineQueue(qItem);
-      setOfflineQueue(getOfflineQueue());
-    } else {
-      // Trigger instant background sync
-      handleForceSync();
-    }
-
-    // Trigger local push notification
-    triggerLocalPushNotification(
-      'Package Scanned & Logged',
-      `${newPkg.id} (${newPkg.vendor}) recorded at ${currentLocation.code}`
-    );
-
-    setIsScanningAI(false);
-    setCurrentStep('SHELF');
-  };
-
-  // Add new package manually
-  const handleAddPackage = (newPkg: PackageItem) => {
-    setPackages((prev) => [newPkg, ...prev]);
-    if (!isOnline) {
-      addToOfflineQueue({
-        id: `q-${Date.now()}`,
-        type: 'NEW_PACKAGE',
-        timestamp: new Date().toISOString(),
-        data: newPkg,
-        status: 'PENDING',
-        retryCount: 0,
+    try {
+      await odooCall<{ id: number; duplicate: boolean }>('/dock42/api/capture', {
+        capture_uuid: generateUuid(),
+        po_number: scannedData?.poNumber,
+        vendor: scannedData?.vendor ?? 'Unknown Vendor',
+        item_name: scannedData?.itemName ?? 'Unlabeled Item',
+        weight_kg: scannedData?.weightKg ?? 0,
+        photo_package: scannedData?.imageUrl,
       });
-      setOfflineQueue(getOfflineQueue());
-    } else {
-      handleForceSync();
+      // Re-fetch the feed so local state always reflects server truth,
+      // rather than optimistically constructing a local record that could
+      // diverge from what the server actually stored.
+      await refreshFeed();
+      triggerLocalPushNotification(
+        'Package Scanned & Logged',
+        `Recorded at ${currentLocation.code}`
+      );
+      setCurrentStep('SHELF');
+    } catch (e) {
+      console.warn('Capture failed:', e);
+      triggerLocalPushNotification('Capture Failed', String(e));
+    } finally {
+      setIsScanningAI(false);
     }
   };
 
-  // Update shelf bin
-  const handleUpdateShelf = (pkgId: string, newShelf: string) => {
-    setPackages((prev) =>
-      prev.map((p) =>
-        p.id === pkgId
-          ? {
-              ...p,
-              shelfLocation: newShelf,
-              status: p.status === 'DAMAGED' ? 'DAMAGED' : 'STORED',
-              shelfAssigned: true,
-            }
-          : p
-      )
-    );
-    if (selectedPackage && selectedPackage.id === pkgId) {
-      setSelectedPackage((prev) =>
-        prev
-          ? {
-              ...prev,
-              shelfLocation: newShelf,
-              status: prev.status === 'DAMAGED' ? 'DAMAGED' : 'STORED',
-              shelfAssigned: true,
-            }
-          : null
-      );
+  // Add new package manually (Inbound "manual entry" form) — persisted via
+  // the same capture endpoint as camera-based scans, no more local-only
+  // state + fake offline queue.
+  const handleAddPackage = async (newPkg: PackageItem) => {
+    try {
+      await odooCall('/dock42/api/capture', {
+        capture_uuid: generateUuid(),
+        po_number: newPkg.poNumber,
+        vendor: newPkg.vendor,
+        item_name: newPkg.itemName,
+        weight_kg: newPkg.weightKg,
+      });
+      await refreshFeed();
+    } catch (e) {
+      console.warn('Manual package add failed:', e);
+      triggerLocalPushNotification('Manual Entry Failed', String(e));
     }
   };
 
-  // Toggle damage flag on package
-  const handleToggleDamage = (pkgId: string) => {
-    setPackages((prev) =>
-      prev.map((p) =>
-        p.id === pkgId
-          ? {
-              ...p,
-              status: p.status === 'DAMAGED' ? 'STORED' : 'DAMAGED',
-            }
-          : p
-      )
-    );
-    if (selectedPackage && selectedPackage.id === pkgId) {
-      setSelectedPackage((prev) =>
-        prev
-          ? {
-              ...prev,
-              status: prev.status === 'DAMAGED' ? 'STORED' : 'DAMAGED',
-            }
-          : null
-      );
-    }
+  // Update shelf bin — actually persisted, no more local-only mutation
+  const handleUpdateShelf = async (pkgId: string, newShelf: string) => {
+    await odooCall('/dock42/api/update_shelf', {
+      package_id: Number(pkgId),
+      shelf_location: newShelf,
+    });
+    await refreshFeed();
+  };
+
+  // Toggle damage flag on package — actually persisted
+  const handleToggleDamage = async (pkgId: string) => {
+    await odooCall('/dock42/api/flag_damage', { package_id: Number(pkgId) });
+    await refreshFeed();
   };
 
   // Flag damaged shipment from FlagView
@@ -281,7 +224,7 @@ export default function App() {
         onOpenLocationModal={() => setShowLocationModal(true)}
         isOnline={isOnline}
         onToggleOnline={() => setIsOnline(!isOnline)}
-        queuedCount={offlineQueue.length}
+        queuedCount={0}
       />
 
       {/* Main Screen Canvas */}
@@ -306,9 +249,9 @@ export default function App() {
             {/* Sync Status Bar & Arrived Today List */}
             <section className="flex-1 bg-[#F8FAFC] p-4 flex flex-col gap-4">
               <SyncBar
-                queuedCount={offlineQueue.length}
+                queuedCount={0}
                 isSyncing={isSyncing}
-                onForceSync={handleForceSync}
+                onForceSync={handleManualRefresh}
                 lastSyncTime={odooConfig.lastSyncTime}
               />
 
@@ -332,8 +275,8 @@ export default function App() {
           <SyncView
             odooConfig={odooConfig}
             onUpdateConfig={setOdooConfig}
-            queue={offlineQueue}
-            onForceSync={handleForceSync}
+            queue={[]}
+            onForceSync={handleManualRefresh}
             isSyncing={isSyncing}
             isOnline={isOnline}
             onToggleOnline={() => setIsOnline(!isOnline)}

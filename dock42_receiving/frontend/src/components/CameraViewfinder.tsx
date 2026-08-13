@@ -18,6 +18,7 @@ export const CameraViewfinder = forwardRef<CameraViewfinderHandle, CameraViewfin
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const isCapturingRef = useRef(false);
+  const streamRef = useRef<MediaStream | null>(null);
   const [useRealCamera, setUseRealCamera] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [torchOn, setTorchOn] = useState<boolean>(false);
@@ -25,14 +26,16 @@ export const CameraViewfinder = forwardRef<CameraViewfinderHandle, CameraViewfin
 
   // Initialize or stop real camera stream
   useEffect(() => {
-    let stream: MediaStream | null = null;
+    let cancelled = false;
     if (useRealCamera) {
       navigator.mediaDevices
-        .getUserMedia({
-          video: { facingMode: { ideal: 'environment' } },
-        })
+        .getUserMedia({ video: { facingMode: { ideal: 'environment' } } })
         .then((s) => {
-          stream = s;
+          if (cancelled) {
+            s.getTracks().forEach((track) => track.stop());
+            return;
+          }
+          streamRef.current = s;
           if (videoRef.current) {
             videoRef.current.srcObject = s;
           }
@@ -43,17 +46,17 @@ export const CameraViewfinder = forwardRef<CameraViewfinderHandle, CameraViewfin
           setCameraError('Camera access unavailable. Using high-contrast dock viewfinder.');
           setUseRealCamera(false);
         });
-    } else {
-      if (videoRef.current && videoRef.current.srcObject) {
-        const s = videoRef.current.srcObject as MediaStream;
-        s.getTracks().forEach((track) => track.stop());
-        videoRef.current.srcObject = null;
-      }
+    } else if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+      if (videoRef.current) videoRef.current.srcObject = null;
     }
 
     return () => {
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
+      cancelled = true;
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
       }
     };
   }, [useRealCamera]);
@@ -81,37 +84,35 @@ export const CameraViewfinder = forwardRef<CameraViewfinderHandle, CameraViewfin
         }
       }
 
-      // Call server AI scanner endpoint `/api/scan-label`
+      // Call the real Odoo AI scanner endpoint
       try {
-        const res = await fetch('/api/scan-label', {
+        const res = await fetch('/dock42/api/scan-label', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            imageBase64: imageBase64 || null,
-            manualPrompt: 'Scan warehouse package label at Dock 42',
+            jsonrpc: '2.0', method: 'call',
+            params: { image_base64: imageBase64?.replace(/^data:image\/\w+;base64,/, '') },
           }),
         });
-        const data = await res.json();
-        if (data.success) {
-          setLastScannedBanner(`Scanned ${data.packageId} - ${data.itemName}`);
+        const body = await res.json();
+        const data = body.result;
+        if (data?.success) {
+          setLastScannedBanner(`Scanned ${data.vendor}`);
           setTimeout(() => setLastScannedBanner(null), 4000);
           onCaptureScan({
-            id: data.packageId,
-            poNumber: data.poNumber,
+            poNumber: data.po_number,
             vendor: data.vendor,
-            itemName: data.itemName,
-            weightKg: data.weightKg,
-            shelfLocation: data.shelfLocation,
-            status: data.isDamaged ? 'DAMAGED' : 'SHELF_PENDING',
+            itemName: data.item_name,
+            weightKg: data.weight_kg,
+            shelfLocation: data.shelf_location,
+            status: data.is_damaged ? 'DAMAGED' : 'SHELF_PENDING',
             notes: data.notes,
           });
+        } else {
+          setCameraError(data?.error || 'Scan failed.');
         }
       } catch (e) {
-        // Fallback local mock scan
-        const mockId = `PR-${Math.floor(1000 + Math.random() * 9000)}`;
-        setLastScannedBanner(`Captured ${mockId} (Offline Scan)`);
-        setTimeout(() => setLastScannedBanner(null), 4000);
-        onCaptureScan({ id: mockId });
+        setCameraError('Scan request failed: ' + e);
       }
     } finally {
       isCapturingRef.current = false;

@@ -14,7 +14,7 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = ({
   flaggedCount,
 }) => {
   return (
-    <nav className="bg-white border-t border-slate-200 fixed bottom-0 w-full z-50 flex justify-around items-center px-2 py-2 select-none pb-safe shadow-lg">
+    <nav className="bg-white border-t border-slate-200 fixed bottom-0 w-full z-40 flex justify-around items-center px-2 py-2 select-none pb-safe shadow-lg">
       {/* SCAN TAB */}
       <button
         onClick={() => onChangeTab('scan')}

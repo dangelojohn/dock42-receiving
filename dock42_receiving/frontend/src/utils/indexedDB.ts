@@ -10,7 +10,12 @@ export function getStoredPackages(defaultData: PackageItem[]): PackageItem[] {
       localStorage.setItem(STORAGE_KEY_PACKAGES, JSON.stringify(defaultData));
       return defaultData;
     }
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.some((p) => typeof p?.id !== 'string')) {
+      console.warn('Stored packages failed shape validation, resetting to defaults.');
+      return defaultData;
+    }
+    return parsed;
   } catch (e) {
     return defaultData;
   }
@@ -73,7 +78,7 @@ export function triggerLocalPushNotification(title: string, body: string) {
     navigator.serviceWorker.ready.then((reg) => {
       reg.showNotification(title, {
         body,
-        icon: '/manifest.json',
+        icon: '/icon-192.png',
       } as NotificationOptions);
     });
   } else {

@@ -67,12 +67,19 @@ export const InboundView: React.FC<InboundViewProps> = ({
     setNewId(`PR-${Math.floor(1000 + Math.random() * 9000)}`);
   };
 
+  const csvEscape = (value: unknown): string => {
+    let s = String(value ?? '');
+    if (/^[=+\-@]/.test(s)) s = "'" + s; // neutralize formula injection
+    if (/[",\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  };
+
   const exportCSV = () => {
     const csvRows = [
       ['Package ID', 'PO Number', 'Vendor', 'Item', 'Weight (kg)', 'Status', 'Shelf Bin', 'Time', 'Odoo Ref'],
       ...filtered.map((p) => [p.id, p.poNumber, p.vendor, p.itemName, p.weightKg, p.status, p.shelfLocation, p.timeReceived, p.odooPickingRef || '']),
     ];
-    const csvContent = 'data:text/csv;charset=utf-8,' + csvRows.map((e) => e.join(',')).join('\n');
+    const csvContent = 'data:text/csv;charset=utf-8,' + csvRows.map((row) => row.map(csvEscape).join(',')).join('\n');
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
