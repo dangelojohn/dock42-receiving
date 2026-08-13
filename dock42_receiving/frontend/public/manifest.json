@@ -1,0 +1,23 @@
+{
+  "short_name": "DOCK-42",
+  "name": "DOCK-42 RECEIVING - Odoo v19 CE PWA",
+  "description": "Industrial warehouse dock receiving web app for Odoo v19 CE with offline sync and push notifications",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#12151A",
+  "theme_color": "#12151A",
+  "display": "standalone",
+  "orientation": "portrait",
+  "categories": ["business", "productivity", "utilities"]
+}

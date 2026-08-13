@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Inter', sans-serif;
+    background-color: #F8FAFC;
+    color: #1E293B;
+  }
+  
+  h1, h2, h3, h4, .font-headline {
+    font-family: 'IBM Plex Sans', sans-serif;
+  }
+}
+
+/* Custom Camera Viewfinder Brackets */
+.viewfinder-corner {
+  position: absolute;
+  width: 2rem;
+  height: 2rem;
+  border: 2px solid #714B67;
+  z-index: 10;
+}
+
+.tl-corner { top: 1rem; left: 1rem; border-right: none; border-bottom: none; }
+.tr-corner { top: 1rem; right: 1rem; border-left: none; border-bottom: none; }
+.bl-corner { bottom: 1rem; left: 1rem; border-right: none; border-top: none; }
+.br-corner { bottom: 1rem; right: 1rem; border-left: none; border-top: none; }
+
+/* Custom Scrollbar for Geometric Balance UI */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #F1F5F9;
+}
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
+}
+
+/* Safe area padding for mobile PWA */
+.pb-safe {
+  padding-bottom: max(1.25rem, env(safe-area-inset-bottom));
+}
