@@ -558,13 +558,13 @@ class Dock42PWA(http.Controller):
             ('Cache-Control', 'no-store'),
         ])
 
-    @http.route('/dock42/api/capture', type='json', auth='user', methods=['POST'])
+    @http.route('/dock42/api/capture', type='jsonrpc', auth='user', methods=['POST'])
     def capture(self, **kw):
         if not _is_operator():
             raise AccessError('Please sign in with an operator account.')
         return request.env['dock42.package'].pwa_create_capture(kw)
 
-    @http.route('/dock42/api/update_shelf', type='json', auth='user', methods=['POST'])
+    @http.route('/dock42/api/update_shelf', type='jsonrpc', auth='user', methods=['POST'])
     def update_shelf(self, package_id=None, shelf_location=None, photo_shelf=None, **kw):
         if not _is_operator():
             raise AccessError('Please sign in with an operator account.')
@@ -573,7 +573,7 @@ class Dock42PWA(http.Controller):
             return {'ok': False}
         return record.pwa_add_shelf(shelf_location, photo_shelf)
 
-    @http.route('/dock42/api/flag_damage', type='json', auth='user', methods=['POST'])
+    @http.route('/dock42/api/flag_damage', type='jsonrpc', auth='user', methods=['POST'])
     def flag_damage(self, package_id=None, **kw):
         if not _is_operator():
             raise AccessError('Please sign in with an operator account.')
@@ -582,7 +582,7 @@ class Dock42PWA(http.Controller):
             return {'ok': False}
         return record.pwa_toggle_flag()
 
-    @http.route('/dock42/api/feed', type='json', auth='user')
+    @http.route('/dock42/api/feed', type='jsonrpc', auth='user')
     def feed(self, limit=25, **kw):
         if not _is_operator():
             raise AccessError('Please sign in with an operator account.')
@@ -771,7 +771,7 @@ def _call_gemini_vision(api_key, image_b64, mime_type='image/jpeg'):
 Add the route inside the `Dock42PWA` class:
 
 ```python
-    @http.route('/dock42/api/scan-label', type='json', auth='user', methods=['POST'])
+    @http.route('/dock42/api/scan-label', type='jsonrpc', auth='user', methods=['POST'])
     def scan_label(self, image_base64=None, mime_type='image/jpeg', **kw):
         if not _is_operator():
             raise AccessError('Please sign in with an operator account.')
