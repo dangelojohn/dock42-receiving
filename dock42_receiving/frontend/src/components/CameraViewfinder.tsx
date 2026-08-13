@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useImperativeHandle, forwardRef } from 'react';
 import { Camera, Upload, RefreshCw, Zap, Sparkles, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { PackageItem } from '../types';
 
@@ -7,10 +7,14 @@ interface CameraViewfinderProps {
   isScanningAI: boolean;
 }
 
-export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
+export interface CameraViewfinderHandle {
+  triggerScan: () => void;
+}
+
+export const CameraViewfinder = forwardRef<CameraViewfinderHandle, CameraViewfinderProps>(({
   onCaptureScan,
   isScanningAI,
-}) => {
+}, ref) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [useRealCamera, setUseRealCamera] = useState<boolean>(false);
@@ -108,6 +112,10 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
       onCaptureScan({ id: mockId });
     }
   };
+
+  useImperativeHandle(ref, () => ({
+    triggerScan: handleTriggerScan,
+  }));
 
   // Handle uploaded photo for OCR scan
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -232,4 +240,4 @@ export const CameraViewfinder: React.FC<CameraViewfinderProps> = ({
       )}
     </section>
   );
-};
+});

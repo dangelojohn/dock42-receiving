@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header';
-import { CameraViewfinder } from './components/CameraViewfinder';
+import { CameraViewfinder, CameraViewfinderHandle } from './components/CameraViewfinder';
 import { CaptureStrip } from './components/CaptureStrip';
 import { SyncBar } from './components/SyncBar';
 import { ArrivedTodayList } from './components/ArrivedTodayList';
@@ -55,6 +55,7 @@ export default function App() {
   );
   const [showLocationModal, setShowLocationModal] = useState<boolean>(false);
   const [odooConfig, setOdooConfig] = useState<OdooConfig>(DEFAULT_ODOO_CONFIG);
+  const cameraRef = React.useRef<CameraViewfinderHandle>(null);
 
   // Mount service worker on startup
   useEffect(() => {
@@ -130,7 +131,7 @@ export default function App() {
       poNumber: scannedData?.poNumber || `PO-2026-${Math.floor(100 + Math.random() * 900)}`,
       vendor: scannedData?.vendor || 'Industrial Logistics Corp',
       itemName: scannedData?.itemName || 'Heavy Duty Replacement Parts',
-      weightKg: scannedData?.weightKg || 15.2,
+      weightKg: scannedData?.weightKg ?? 15.2,
       timeReceived: nowTime,
       dateReceived: new Date().toISOString().split('T')[0],
       status: scannedData?.status || 'SHELF_PENDING',
@@ -289,6 +290,7 @@ export default function App() {
           <>
             {/* Live Camera Viewfinder */}
             <CameraViewfinder
+              ref={cameraRef}
               onCaptureScan={handleCaptureScan}
               isScanningAI={isScanningAI}
             />
@@ -297,7 +299,8 @@ export default function App() {
             <CaptureStrip
               currentStep={currentStep}
               onSelectStep={setCurrentStep}
-              onTriggerCapture={handleCaptureScan}
+              onTriggerCapture={() => cameraRef.current?.triggerScan()}
+              isScanningAI={isScanningAI}
             />
 
             {/* Sync Status Bar & Arrived Today List */}
@@ -347,6 +350,7 @@ export default function App() {
 
       {/* Package Detail Drawer / Modal */}
       <PackageDetailModal
+        key={selectedPackage?.id ?? 'none'}
         pkg={selectedPackage}
         onClose={() => setSelectedPackage(null)}
         onUpdateShelf={handleUpdateShelf}

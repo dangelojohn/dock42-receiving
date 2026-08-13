@@ -15,10 +15,10 @@ export const PackageDetailModal: React.FC<PackageDetailModalProps> = ({
   onUpdateShelf,
   onToggleDamage,
 }) => {
-  if (!pkg) return null;
-
-  const [shelfInput, setShelfInput] = useState(pkg.shelfLocation);
+  const [shelfInput, setShelfInput] = useState(pkg?.shelfLocation ?? '');
   const [copiedBanner, setCopiedBanner] = useState(false);
+
+  if (!pkg) return null;
 
   const handleSaveShelf = () => {
     onUpdateShelf(pkg.id, shelfInput);

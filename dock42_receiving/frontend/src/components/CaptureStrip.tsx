@@ -6,12 +6,14 @@ interface CaptureStripProps {
   currentStep: CaptureStep;
   onSelectStep: (step: CaptureStep) => void;
   onTriggerCapture: () => void;
+  isScanningAI: boolean;
 }
 
 export const CaptureStrip: React.FC<CaptureStripProps> = ({
   currentStep,
   onSelectStep,
   onTriggerCapture,
+  isScanningAI,
 }) => {
   return (
     <section className="p-4 bg-white border-b border-slate-200 select-none shadow-xs">
@@ -36,7 +38,9 @@ export const CaptureStrip: React.FC<CaptureStripProps> = ({
 
         {/* Segment 2: PACKAGE (ACTIVE / TAP TO CAPTURE) */}
         <button
+          disabled={isScanningAI}
           onClick={() => {
+            if (isScanningAI) return;
             onSelectStep('PACKAGE');
             onTriggerCapture();
           }}
