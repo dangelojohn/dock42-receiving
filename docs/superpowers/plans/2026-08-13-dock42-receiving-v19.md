@@ -1224,9 +1224,12 @@ function generateUuid(): string {
     }
   };
 
-  const refreshFeed = async () => {
+  // Returns the mapped list so callers that also need to re-sync a
+  // separately-held snapshot (selectedPackage) don't have to read `packages`
+  // back out of a stale closure right after calling setPackages.
+  const refreshFeed = async (): Promise<PackageItem[]> => {
     const feed = await odooCall<any[]>('/dock42/api/feed', { limit: 50 });
-    setPackages(feed.map((r) => ({
+    const mapped: PackageItem[] = feed.map((r) => ({
       id: String(r.id),
       poNumber: r.po_number,
       vendor: r.vendor,
@@ -1241,7 +1244,9 @@ function generateUuid(): string {
       shelfAssigned: r.state === 'stored',
       odooSynced: true,
       dockLocation: currentLocation.name,
-    })));
+    }));
+    setPackages(mapped);
+    return mapped;
   };
 ```
 
@@ -1256,7 +1261,16 @@ mutates local state and never persists, which is exactly review finding #3
       package_id: Number(pkgId),
       shelf_location: newShelf,
     });
-    await refreshFeed();
+    const fresh = await refreshFeed();
+    // Re-sync the open modal's snapshot, not just the list behind it — the
+    // original handlers (pre-Task-7) kept selectedPackage in sync; the
+    // rewrite above dropped that, leaving the modal showing a stale
+    // status/shelf value until closed and reopened (found by Task 7's own
+    // review). PackageDetailModal is keyed only by id, so it won't remount
+    // on its own just because the object's contents changed underneath it.
+    setSelectedPackage((prev) =>
+      prev && prev.id === pkgId ? fresh.find((p) => p.id === pkgId) ?? prev : prev
+    );
   };
 ```
 
@@ -1265,7 +1279,10 @@ Replace `handleToggleDamage` (original lines 224–245) similarly:
 ```tsx
   const handleToggleDamage = async (pkgId: string) => {
     await odooCall('/dock42/api/flag_damage', { package_id: Number(pkgId) });
-    await refreshFeed();
+    const fresh = await refreshFeed();
+    setSelectedPackage((prev) =>
+      prev && prev.id === pkgId ? fresh.find((p) => p.id === pkgId) ?? prev : prev
+    );
   };
 ```
 
@@ -1318,6 +1335,66 @@ Odoo JSON-RPC envelope from Task 5:
 This removes the client-side "fallback local mock scan" branch (original
 lines 103–109) entirely — a failed scan must show an error, not silently
 fabricate a package ID, matching the spec's Controllers section requirement.
+
+**Also rewire `handleFileUpload` the identical way (found by Task 7's own
+review, not a separate task):** the file-upload OCR path (original lines
+113–150, the "UPLOAD" button's handler) calls the same conceptual
+scan-label endpoint but was missed by the description above, which named
+only `handleTriggerScan`. Left as `fetch('/api/scan-label', ...)` with the
+old envelope, this 404s against the real backend, and its `catch (err) {
+onCaptureScan(); }` then calls `onCaptureScan` with **no arguments** —
+exactly the silent-fabrication bug this task exists to eliminate, just
+reachable through the upload button instead of the camera trigger. Apply
+the same fix:
+
+```tsx
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = reader.result as string;
+      try {
+        const res = await fetch('/dock42/api/scan-label', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0', method: 'call',
+            params: {
+              image_base64: base64.replace(/^data:image\/\w+;base64,/, ''),
+              mime_type: file.type,
+            },
+          }),
+        });
+        const body = await res.json();
+        const data = body.result;
+        if (data?.success) {
+          setLastScannedBanner(`AI OCR extracted (${data.vendor})`);
+          setTimeout(() => setLastScannedBanner(null), 4000);
+          onCaptureScan({
+            poNumber: data.po_number,
+            vendor: data.vendor,
+            itemName: data.item_name,
+            weightKg: data.weight_kg,
+            shelfLocation: data.shelf_location,
+            status: data.is_damaged ? 'DAMAGED' : 'SHELF_PENDING',
+            imageUrl: base64,
+            notes: data.notes,
+          });
+        } else {
+          setCameraError(data?.error || 'Scan failed.');
+        }
+      } catch (err) {
+        setCameraError('Scan request failed: ' + err);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+```
+Same principle as `handleTriggerScan`: no code path may call `onCaptureScan`
+except with real data from a successful response — a failure shows an
+error, never a fabricated capture.
 
 - [ ] **Step 4: Fix the camera stream cleanup race (finding #5)**
 
