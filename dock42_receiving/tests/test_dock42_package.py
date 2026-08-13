@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from odoo.tests.common import TransactionCase
 from odoo.tests import tagged
 
@@ -52,3 +54,60 @@ class TestDock42PackageCapture(TransactionCase):
         })
         record = Package.browse(result['id'])
         self.assertEqual(record.weight_kg, 0)
+
+    def test_pwa_create_capture_survives_true_uuid_race(self):
+        """Force the exact race the DB constraint guards against: two
+        requests' pwa_create_capture() calls both pass the initial dedup
+        search() before either has committed, so the second one only
+        discovers the collision when its own create() hits the DB-level
+        UNIQUE(capture_uuid) constraint. That must be caught and turned
+        into a duplicate=True response with the winner's id — not an
+        unhandled IntegrityError — and it must not poison the cursor for
+        calls made after it.
+        """
+        Package = self.env['dock42.package']
+
+        # "Another request" wins the race and commits its row first —
+        # created directly via create(), bypassing pwa_create_capture's
+        # own dedup search entirely (exactly as a concurrent request
+        # would, from this request's point of view).
+        winner = Package.create({
+            'capture_uuid': 'uuid-race',
+            'po_number': 'PO-2026-200',
+            'vendor': 'Race Winner Vendor',
+            'item_name': 'Race Winner Item',
+            'state': 'shelf_pending',
+        })
+
+        # Make *this* call's own initial dedup search miss the row that
+        # is actually already there, for exactly one call — reproducing
+        # the narrow window a true race exploits (searched, found
+        # nothing, then discovered someone else's row was already
+        # committed by the time create() ran). Every other search() call
+        # — notably the fallback lookup inside pwa_create_capture's
+        # except block — behaves normally.
+        real_search = type(Package).search
+        already_faked = []
+
+        def fake_search(self, domain, *args, **kwargs):
+            if domain == [('capture_uuid', '=', 'uuid-race')] and not already_faked:
+                already_faked.append(True)
+                return self.browse()
+            return real_search(self, domain, *args, **kwargs)
+
+        with patch.object(type(Package), 'search', fake_search):
+            result = Package.pwa_create_capture({
+                'capture_uuid': 'uuid-race',
+                'po_number': 'PO-2026-999',
+                'vendor': 'Loser Vendor',
+                'item_name': 'Loser Item',
+                'weight_kg': 1.0,
+            })
+
+        self.assertEqual(result, {'id': winner.id, 'duplicate': True})
+
+        # The cursor must still be usable after the caught IntegrityError
+        # (a bare try/except without a savepoint would leave it aborted)
+        # — prove it by making another ORM call right after.
+        count = Package.search_count([('capture_uuid', '=', 'uuid-race')])
+        self.assertEqual(count, 1)

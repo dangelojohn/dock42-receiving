@@ -1,4 +1,7 @@
+import psycopg2
+
 from odoo import api, fields, models
+from odoo.tools import mute_logger
 
 
 class Dock42Package(models.Model):
@@ -82,6 +85,27 @@ class Dock42Package(models.Model):
             if vals.get(key):
                 create_vals[key] = self._strip_b64(vals[key])
 
-        record = self.create(create_vals)
+        if uuid:
+            # Two requests can both pass the search() above before either has
+            # committed (a genuine race between concurrent PWA retries). The
+            # DB-level UNIQUE(capture_uuid) constraint then rejects the
+            # second create() with an IntegrityError. Run it under a
+            # savepoint so the failed INSERT rolls back to a clean point
+            # instead of poisoning the rest of this transaction (a bare
+            # try/except around create() would leave the cursor aborted and
+            # fail every subsequent ORM call in this request). Once rolled
+            # back, treat it exactly like a search() hit: the other request
+            # won the race, so return its row as a duplicate.
+            try:
+                with mute_logger('odoo.sql_db'), self.env.cr.savepoint():
+                    record = self.create(create_vals)
+            except psycopg2.IntegrityError:
+                existing = self.search([('capture_uuid', '=', uuid)], limit=1)
+                if existing:
+                    return {'id': existing.id, 'duplicate': True}
+                raise
+        else:
+            record = self.create(create_vals)
+
         record.message_post(body='Captured via Dock 42 PWA by %s.' % self.env.user.name)
         return {'id': record.id, 'duplicate': False}
