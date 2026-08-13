@@ -32,7 +32,25 @@ import {
 import { odooCall } from './utils/odooRpc';
 
 function generateUuid(): string {
-  return crypto.randomUUID();
+  // crypto.randomUUID() is a secure-context-only browser API — it's
+  // undefined (and throws if called) on a plain http:// origin, which is
+  // common for internal Odoo deployments. Fall back to a non-crypto but
+  // perfectly adequate idempotency key in that case.
+  if (crypto.randomUUID) return crypto.randomUUID();
+  return 'dock42-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+}
+
+// FlagView's UI uses display-friendly uppercase ids for damage category/
+// severity; the backend's Selection fields use lowercase snake_case keys
+// (and "CRITICAL" maps to the model's "critical_quarantine", not a plain
+// lowercase of itself) — map explicitly rather than relying on the two
+// vocabularies staying accidentally in sync.
+function mapDamageCategoryToBackend(uiValue: string): string {
+  return uiValue.toLowerCase();
+}
+function mapDamageSeverityToBackend(uiValue: string): string {
+  if (uiValue === 'CRITICAL') return 'critical_quarantine';
+  return uiValue.toLowerCase();
 }
 
 export default function App() {
@@ -53,7 +71,19 @@ export default function App() {
   );
   const [showLocationModal, setShowLocationModal] = useState<boolean>(false);
   const [odooConfig, setOdooConfig] = useState<OdooConfig>(DEFAULT_ODOO_CONFIG);
+  // Visible error surface — the notification-permission path in indexedDB.ts
+  // is opt-in-only and (pre-I1-fix) could never resolve, so it structurally
+  // cannot be relied on to report a failed backend call to the operator.
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const cameraRef = React.useRef<CameraViewfinderHandle>(null);
+  // Idempotency keys for the two capture entry points, minted once per
+  // logical attempt and held stable across a retry of that same attempt —
+  // cleared only once the server has confirmed the write actually landed.
+  // A fresh generateUuid() call is deliberately *not* made inline inside
+  // handleCaptureScan/handleAddPackage, since that would mint a new key (and
+  // thus a new duplicate row) on every retry instead of deduping it.
+  const captureUuidRef = React.useRef<string | null>(null);
+  const addPackageUuidRef = React.useRef<string | null>(null);
 
   // Pull the package feed from Odoo — this is now the single source of
   // truth for `packages`, rather than a locally-constructed record that
@@ -63,22 +93,31 @@ export default function App() {
   // back out of a stale closure right after calling setPackages.
   const refreshFeed = async (): Promise<PackageItem[]> => {
     const feed = await odooCall<any[]>('/dock42/api/feed', { limit: 50 });
-    const mapped: PackageItem[] = feed.map((r) => ({
-      id: String(r.id),
-      poNumber: r.po_number,
-      vendor: r.vendor,
-      itemName: r.item_name,
-      weightKg: r.weight_kg,
-      timeReceived: '',
-      dateReceived: '',
-      status: r.state === 'stored' ? 'STORED' : r.state === 'damaged' ? 'DAMAGED' : 'SHELF_PENDING',
-      shelfLocation: r.shelf_location,
-      labelScanned: true,
-      packageCaptured: true,
-      shelfAssigned: r.state === 'stored',
-      odooSynced: true,
-      dockLocation: currentLocation.name,
-    }));
+    const mapped: PackageItem[] = feed.map((r) => {
+      // pwa_feed returns create_date as a naive-UTC ISO string (Odoo stores
+      // create_date in UTC); append 'Z' so the browser parses it as UTC
+      // instead of misreading it as local time.
+      const created = r.create_date ? new Date(r.create_date + 'Z') : null;
+      const validCreated = created && !isNaN(created.getTime()) ? created : null;
+      return {
+        id: String(r.id),
+        poNumber: r.po_number,
+        vendor: r.vendor,
+        itemName: r.item_name,
+        weightKg: r.weight_kg,
+        timeReceived: validCreated
+          ? validCreated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+          : '',
+        dateReceived: validCreated ? validCreated.toISOString().split('T')[0] : '',
+        status: r.state === 'stored' ? 'STORED' : r.state === 'damaged' ? 'DAMAGED' : 'SHELF_PENDING',
+        shelfLocation: r.shelf_location,
+        labelScanned: true,
+        packageCaptured: true,
+        shelfAssigned: r.state === 'stored',
+        odooSynced: true,
+        dockLocation: currentLocation.name,
+      };
+    });
     setPackages(mapped);
     return mapped;
   };
@@ -103,10 +142,24 @@ export default function App() {
     }
   };
 
-  // Mount service worker & pull the initial feed from Odoo on startup
+  // Mount service worker & pull the initial feed from Odoo on startup.
+  // connected/lastSyncTime only flip to a real value once this genuinely
+  // succeeds — DEFAULT_ODOO_CONFIG starts blank/false rather than claiming
+  // a connection that hasn't happened yet.
   useEffect(() => {
     registerServiceWorker();
-    refreshFeed().catch((e) => console.warn('Initial feed load failed:', e));
+    refreshFeed()
+      .then(() => {
+        setOdooConfig((prev) => ({
+          ...prev,
+          connected: true,
+          lastSyncTime: `Today at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+        }));
+      })
+      .catch((e) => {
+        console.warn('Initial feed load failed:', e);
+        setErrorBanner(`Could not load packages from Odoo: ${e instanceof Error ? e.message : String(e)}`);
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -133,15 +186,28 @@ export default function App() {
   // Handle barcode/package scan capture
   const handleCaptureScan = async (scannedData?: Partial<PackageItem>) => {
     setIsScanningAI(true);
+    // Mint the idempotency key once per logical capture attempt and hold it
+    // in a ref so a retry (this function called again before a prior call
+    // ever succeeded) reuses the same uuid instead of creating a duplicate
+    // row server-side.
+    if (!captureUuidRef.current) captureUuidRef.current = generateUuid();
+    const captureUuid = captureUuidRef.current;
     try {
       await odooCall<{ id: number; duplicate: boolean }>('/dock42/api/capture', {
-        capture_uuid: generateUuid(),
+        capture_uuid: captureUuid,
         po_number: scannedData?.poNumber,
         vendor: scannedData?.vendor ?? 'Unknown Vendor',
         item_name: scannedData?.itemName ?? 'Unlabeled Item',
         weight_kg: scannedData?.weightKg ?? 0,
         photo_package: scannedData?.imageUrl,
+        notes: scannedData?.notes,
+        // The AI scan may have flagged the package as damaged on sight —
+        // record that at creation time instead of silently storing it as
+        // undamaged with no trace of what the scan actually found.
+        initial_damaged: scannedData?.status === 'DAMAGED',
       });
+      // Confirmed success — the next capture attempt gets a fresh uuid.
+      captureUuidRef.current = null;
       // Re-fetch the feed so local state always reflects server truth,
       // rather than optimistically constructing a local record that could
       // diverge from what the server actually stored.
@@ -150,10 +216,12 @@ export default function App() {
         'Package Scanned & Logged',
         `Recorded at ${currentLocation.code}`
       );
+      setErrorBanner(null);
       setCurrentStep('SHELF');
     } catch (e) {
       console.warn('Capture failed:', e);
       triggerLocalPushNotification('Capture Failed', String(e));
+      setErrorBanner(`Capture failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setIsScanningAI(false);
     }
@@ -163,72 +231,112 @@ export default function App() {
   // the same capture endpoint as camera-based scans, no more local-only
   // state + fake offline queue.
   const handleAddPackage = async (newPkg: PackageItem) => {
+    if (!addPackageUuidRef.current) addPackageUuidRef.current = generateUuid();
+    const captureUuid = addPackageUuidRef.current;
     try {
       await odooCall('/dock42/api/capture', {
-        capture_uuid: generateUuid(),
+        capture_uuid: captureUuid,
         po_number: newPkg.poNumber,
         vendor: newPkg.vendor,
         item_name: newPkg.itemName,
         weight_kg: newPkg.weightKg,
+        shelf_location: newPkg.shelfLocation,
       });
+      addPackageUuidRef.current = null;
       await refreshFeed();
+      setErrorBanner(null);
     } catch (e) {
       console.warn('Manual package add failed:', e);
       triggerLocalPushNotification('Manual Entry Failed', String(e));
+      setErrorBanner(`Manual entry failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
-  // Update shelf bin — actually persisted, no more local-only mutation
-  const handleUpdateShelf = async (pkgId: string, newShelf: string) => {
-    await odooCall('/dock42/api/update_shelf', {
-      package_id: Number(pkgId),
-      shelf_location: newShelf,
-    });
-    const fresh = await refreshFeed();
-    // Re-sync the open modal's snapshot, not just the list behind it — the
-    // original handlers (pre-Task-7) kept selectedPackage in sync; the
-    // rewrite above dropped that, leaving the modal showing a stale
-    // status/shelf value until closed and reopened (found by Task 7's own
-    // review). PackageDetailModal is keyed only by id, so it won't remount
-    // on its own just because the object's contents changed underneath it.
-    setSelectedPackage((prev) =>
-      prev && prev.id === pkgId ? fresh.find((p) => p.id === pkgId) ?? prev : prev
-    );
+  // Update shelf bin — actually persisted, no more local-only mutation.
+  // Returns whether it actually succeeded so callers (PackageDetailModal)
+  // can gate their own success UI on a real result instead of assuming.
+  const handleUpdateShelf = async (pkgId: string, newShelf: string): Promise<boolean> => {
+    try {
+      const result = await odooCall<{ ok: boolean }>('/dock42/api/update_shelf', {
+        package_id: Number(pkgId),
+        shelf_location: newShelf,
+      });
+      if (!result?.ok) {
+        throw new Error('Odoo rejected the shelf update.');
+      }
+      const fresh = await refreshFeed();
+      // Re-sync the open modal's snapshot, not just the list behind it — the
+      // original handlers (pre-Task-7) kept selectedPackage in sync; the
+      // rewrite above dropped that, leaving the modal showing a stale
+      // status/shelf value until closed and reopened (found by Task 7's own
+      // review). PackageDetailModal is keyed only by id, so it won't remount
+      // on its own just because the object's contents changed underneath it.
+      setSelectedPackage((prev) =>
+        prev && prev.id === pkgId ? fresh.find((p) => p.id === pkgId) ?? prev : prev
+      );
+      setErrorBanner(null);
+      return true;
+    } catch (e) {
+      console.warn('Shelf update failed:', e);
+      setErrorBanner(`Shelf update failed: ${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    }
   };
 
-  // Toggle damage flag on package — actually persisted
-  const handleToggleDamage = async (pkgId: string) => {
-    await odooCall('/dock42/api/flag_damage', { package_id: Number(pkgId) });
-    const fresh = await refreshFeed();
-    setSelectedPackage((prev) =>
-      prev && prev.id === pkgId ? fresh.find((p) => p.id === pkgId) ?? prev : prev
-    );
+  // Toggle damage flag on package — actually persisted. Returns whether it
+  // actually succeeded, same reasoning as handleUpdateShelf above.
+  const handleToggleDamage = async (pkgId: string): Promise<boolean> => {
+    try {
+      const result = await odooCall<{ ok: boolean; flagged: boolean }>('/dock42/api/flag_damage', {
+        package_id: Number(pkgId),
+      });
+      if (!result?.ok) {
+        throw new Error('Odoo rejected the damage flag toggle.');
+      }
+      const fresh = await refreshFeed();
+      setSelectedPackage((prev) =>
+        prev && prev.id === pkgId ? fresh.find((p) => p.id === pkgId) ?? prev : prev
+      );
+      setErrorBanner(null);
+      return true;
+    } catch (e) {
+      console.warn('Damage flag toggle failed:', e);
+      setErrorBanner(`Damage flag toggle failed: ${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    }
   };
 
-  // Flag damaged shipment from FlagView
-  const handleReportDamage = (
+  // Flag damaged shipment from FlagView — actually persisted via
+  // pwa_report_damage, not a local-only mutation. Returns whether it
+  // actually succeeded so FlagView only shows its "filed" banner when a
+  // real write happened.
+  const handleReportDamage = async (
     pkgId: string,
     category: string,
     severity: string,
     notes: string,
     photoUrl?: string
-  ) => {
-    setPackages((prev) =>
-      prev.map((p) =>
-        p.id === pkgId
-          ? {
-              ...p,
-              status: 'DAMAGED',
-              notes: `[DAMAGED - ${category} / ${severity}]: ${notes}`,
-              imageUrl: photoUrl || p.imageUrl,
-            }
-          : p
-      )
-    );
-    triggerLocalPushNotification(
-      '⚠️ Damaged Package Flagged',
-      `${pkgId} flagged as ${severity} damage. Odoo claim ticket created.`
-    );
+  ): Promise<boolean> => {
+    try {
+      const result = await odooCall<{ ok: boolean }>('/dock42/api/report_damage', {
+        package_id: Number(pkgId),
+        category: mapDamageCategoryToBackend(category),
+        severity: mapDamageSeverityToBackend(severity),
+        notes,
+        photo: photoUrl,
+      });
+      if (!result?.ok) {
+        throw new Error('Odoo rejected the damage report.');
+      }
+      await refreshFeed();
+      triggerLocalPushNotification('⚠️ Damaged Package Flagged', `${pkgId} flagged as ${severity} damage.`);
+      setErrorBanner(null);
+      return true;
+    } catch (e) {
+      console.warn('Damage report failed:', e);
+      setErrorBanner(`Damage report failed: ${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    }
   };
 
   const flaggedCount = packages.filter((p) => p.status === 'DAMAGED').length;
@@ -246,6 +354,22 @@ export default function App() {
 
       {/* Main Screen Canvas */}
       <main className="flex-grow pt-14 flex flex-col w-full max-w-3xl mx-auto">
+        {/* Visible error surface — the only reliable channel for surfacing a
+            failed backend call, since notification permission is opt-in and
+            can't be relied on (see indexedDB.ts triggerLocalPushNotification). */}
+        {errorBanner && (
+          <div className="mx-4 mt-3 bg-rose-50 text-rose-800 border border-rose-200 p-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-between gap-2 shadow-xs">
+            <span className="normal-case font-semibold">{errorBanner}</span>
+            <button
+              onClick={() => setErrorBanner(null)}
+              className="text-rose-600 hover:text-rose-900 font-black px-1 shrink-0"
+              aria-label="Dismiss error"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {activeTab === 'scan' && (
           <>
             {/* Live Camera Viewfinder */}

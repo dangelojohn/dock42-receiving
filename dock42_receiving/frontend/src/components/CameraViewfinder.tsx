@@ -107,6 +107,10 @@ export const CameraViewfinder = forwardRef<CameraViewfinderHandle, CameraViewfin
             shelfLocation: data.shelf_location,
             status: data.is_damaged ? 'DAMAGED' : 'SHELF_PENDING',
             notes: data.notes,
+            // The canvas frame just captured is the actual package photo —
+            // include it the same way the upload path does below, instead
+            // of silently dropping it.
+            imageUrl: imageBase64,
           });
         } else {
           setCameraError(data?.error || 'Scan failed.');

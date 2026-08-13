@@ -41,23 +41,26 @@ export const InboundView: React.FC<InboundViewProps> = ({
     e.preventDefault();
     if (!newVendor || !newItemName) return;
 
+    // Only po_number/vendor/item_name/weight_kg/shelf_location actually get
+    // forwarded to the backend by App.tsx's handleAddPackage — the real
+    // record (id, odooPickingRef, timestamps, sync state) comes back from
+    // Odoo via the subsequent refreshFeed(), not from anything fabricated
+    // here.
     const created: PackageItem = {
       id: newId,
       poNumber: newPo,
       vendor: newVendor,
       itemName: newItemName,
       weightKg: Number(newWeight),
-      timeReceived: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
-      dateReceived: new Date().toISOString().split('T')[0],
+      timeReceived: '',
+      dateReceived: '',
       status: 'SHELF_PENDING',
       shelfLocation: newShelf,
       labelScanned: true,
       packageCaptured: true,
       shelfAssigned: false,
-      odooPickingRef: `WH/IN/${Math.floor(10000 + Math.random() * 90000)}`,
       odooSynced: false,
       dockLocation: 'DOCK-42 BAY 1',
-      notes: 'Manually logged by Dock Operator Peter Novak',
     };
 
     onAddPackage(created);
@@ -193,7 +196,7 @@ export const InboundView: React.FC<InboundViewProps> = ({
             <div className="flex items-center justify-between pt-2.5 border-t border-slate-100 text-[11px] text-slate-500">
               <span>Shelf Bin: <strong className="text-slate-800 font-mono">{pkg.shelfLocation}</strong></span>
               <span className="flex items-center gap-1 text-[#714B67] font-semibold">
-                Odoo: {pkg.odooPickingRef || 'WH/IN/00142'} <ArrowUpRight size={12} />
+                Odoo: {pkg.odooPickingRef || '—'} <ArrowUpRight size={12} />
               </span>
             </div>
           </div>

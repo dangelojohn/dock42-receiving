@@ -1,25 +1,41 @@
 import React, { useState } from 'react';
 import { AlertOctagon, Camera, Upload, CheckCircle2, ShieldAlert, FileText } from 'lucide-react';
-import { PackageItem, DamageReport } from '../types';
+import { PackageItem } from '../types';
 
 interface FlagViewProps {
   packages: PackageItem[];
-  onReportDamage: (pkgId: string, category: string, severity: string, notes: string, photoUrl?: string) => void;
+  onReportDamage: (
+    pkgId: string,
+    category: string,
+    severity: string,
+    notes: string,
+    photoUrl?: string
+  ) => Promise<boolean>;
 }
 
 export const FlagView: React.FC<FlagViewProps> = ({ packages, onReportDamage }) => {
-  const [selectedPkgId, setSelectedPkgId] = useState<string>(packages[0]?.id || 'PR-1039');
+  const [selectedPkgId, setSelectedPkgId] = useState<string>(packages[0]?.id ?? '');
   const [category, setCategory] = useState<string>('CRUSHED_BOX');
   const [severity, setSeverity] = useState<string>('MAJOR');
-  const [notes, setNotes] = useState<string>('Outer corrugated box crushed during transit. Hydraulic seepage on left corner.');
-  const [photoUrl, setPhotoUrl] = useState<string | undefined>('https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=600&q=80');
+  const [notes, setNotes] = useState<string>('');
+  const [photoUrl, setPhotoUrl] = useState<string | undefined>(undefined);
+  const [submitting, setSubmitting] = useState<boolean>(false);
   const [submitted, setSubmitted] = useState<boolean>(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onReportDamage(selectedPkgId, category, severity, notes, photoUrl);
-    setSubmitted(true);
-    setTimeout(() => setSubmitted(false), 4000);
+    if (!selectedPkgId || submitting) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    const ok = await onReportDamage(selectedPkgId, category, severity, notes, photoUrl);
+    setSubmitting(false);
+    if (ok) {
+      setSubmitted(true);
+      setTimeout(() => setSubmitted(false), 4000);
+    } else {
+      setSubmitError('Damage report failed to save to Odoo. Please try again.');
+    }
   };
 
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -39,14 +55,21 @@ export const FlagView: React.FC<FlagViewProps> = ({ packages, onReportDamage }) 
           FLAG DAMAGED SHIPMENT
         </h2>
         <p className="text-xs text-slate-500">
-          Generate Odoo v19 CE Scrap Ticket & Freight Claim (`stock.scrap`)
+          File a damage report against a received package in Odoo v19 CE
         </p>
       </div>
 
       {submitted && (
+        <div className="bg-emerald-50 text-emerald-800 border border-emerald-200 p-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-2 shadow-xs">
+          <CheckCircle2 size={16} className="text-emerald-600" />
+          <span>DAMAGE REPORT SAVED — PACKAGE MARKED DAMAGED IN ODOO v19 CE</span>
+        </div>
+      )}
+
+      {submitError && (
         <div className="bg-rose-50 text-rose-800 border border-rose-200 p-3 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-2 shadow-xs">
-          <CheckCircle2 size={16} className="text-rose-600" />
-          <span>DAMAGE REPORT FILED IN ODOO v19 CE (REF: SCRAP/2026/0892)</span>
+          <AlertOctagon size={16} className="text-rose-600" />
+          <span>{submitError}</span>
         </div>
       )}
 
@@ -161,10 +184,11 @@ export const FlagView: React.FC<FlagViewProps> = ({ packages, onReportDamage }) 
 
         <button
           type="submit"
-          className="w-full py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold uppercase tracking-wider text-sm flex items-center justify-center gap-2 shadow-sm transition-all active:scale-[0.99]"
+          disabled={submitting || !selectedPkgId}
+          className="w-full py-3 bg-rose-600 hover:bg-rose-700 disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-xl font-bold uppercase tracking-wider text-sm flex items-center justify-center gap-2 shadow-sm transition-all active:scale-[0.99]"
         >
           <ShieldAlert size={18} />
-          <span>FLAG DAMAGED & GENERATE ODOO CLAIM</span>
+          <span>{submitting ? 'SAVING TO ODOO...' : 'FLAG DAMAGED IN ODOO'}</span>
         </button>
       </form>
     </div>

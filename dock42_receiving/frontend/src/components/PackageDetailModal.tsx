@@ -5,8 +5,8 @@ import { PackageItem } from '../types';
 interface PackageDetailModalProps {
   pkg: PackageItem | null;
   onClose: () => void;
-  onUpdateShelf: (pkgId: string, newShelf: string) => void;
-  onToggleDamage: (pkgId: string) => void;
+  onUpdateShelf: (pkgId: string, newShelf: string) => Promise<boolean>;
+  onToggleDamage: (pkgId: string) => Promise<boolean>;
 }
 
 export const PackageDetailModal: React.FC<PackageDetailModalProps> = ({
@@ -17,13 +17,34 @@ export const PackageDetailModal: React.FC<PackageDetailModalProps> = ({
 }) => {
   const [shelfInput, setShelfInput] = useState(pkg?.shelfLocation ?? '');
   const [copiedBanner, setCopiedBanner] = useState(false);
+  const [savingShelf, setSavingShelf] = useState(false);
+  const [shelfError, setShelfError] = useState<string | null>(null);
+  const [togglingDamage, setTogglingDamage] = useState(false);
+  const [damageError, setDamageError] = useState<string | null>(null);
 
   if (!pkg) return null;
 
-  const handleSaveShelf = () => {
-    onUpdateShelf(pkg.id, shelfInput);
-    setCopiedBanner(true);
-    setTimeout(() => setCopiedBanner(false), 3000);
+  const handleSaveShelf = async () => {
+    setSavingShelf(true);
+    setShelfError(null);
+    const ok = await onUpdateShelf(pkg.id, shelfInput);
+    setSavingShelf(false);
+    if (ok) {
+      setCopiedBanner(true);
+      setTimeout(() => setCopiedBanner(false), 3000);
+    } else {
+      setShelfError('Failed to update shelf bin. Please try again.');
+    }
+  };
+
+  const handleToggleDamageClick = async () => {
+    setTogglingDamage(true);
+    setDamageError(null);
+    const ok = await onToggleDamage(pkg.id);
+    setTogglingDamage(false);
+    if (!ok) {
+      setDamageError('Failed to update damage flag. Please try again.');
+    }
   };
 
   const handlePrintLabel = () => {
@@ -53,7 +74,21 @@ export const PackageDetailModal: React.FC<PackageDetailModalProps> = ({
         {copiedBanner && (
           <div className="bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-bold uppercase tracking-wider p-2.5 rounded-xl flex items-center gap-2 shadow-xs">
             <CheckCircle2 size={14} className="text-emerald-600" />
-            <span>SHELF BIN UPDATED & QUEUED FOR ODOO v19 CE SYNC</span>
+            <span>SHELF BIN UPDATED IN ODOO v19 CE</span>
+          </div>
+        )}
+
+        {shelfError && (
+          <div className="bg-rose-50 text-rose-800 border border-rose-200 text-xs font-bold uppercase tracking-wider p-2.5 rounded-xl flex items-center gap-2 shadow-xs">
+            <AlertTriangle size={14} className="text-rose-600" />
+            <span>{shelfError}</span>
+          </div>
+        )}
+
+        {damageError && (
+          <div className="bg-rose-50 text-rose-800 border border-rose-200 text-xs font-bold uppercase tracking-wider p-2.5 rounded-xl flex items-center gap-2 shadow-xs">
+            <AlertTriangle size={14} className="text-rose-600" />
+            <span>{damageError}</span>
           </div>
         )}
 
@@ -96,7 +131,7 @@ export const PackageDetailModal: React.FC<PackageDetailModalProps> = ({
           </div>
           <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
             <span className="text-slate-500 text-[10px] block uppercase font-bold">Odoo Stock Ref</span>
-            <span className="font-mono text-[#714B67] font-semibold">{pkg.odooPickingRef || 'WH/IN/00142'}</span>
+            <span className="font-mono text-[#714B67] font-semibold">{pkg.odooPickingRef || '—'}</span>
           </div>
         </div>
 
@@ -123,9 +158,10 @@ export const PackageDetailModal: React.FC<PackageDetailModalProps> = ({
             />
             <button
               onClick={handleSaveShelf}
-              className="px-3.5 py-2 bg-[#714B67] hover:bg-[#5E3F56] text-white rounded-lg font-bold text-xs uppercase shadow-xs transition-colors"
+              disabled={savingShelf}
+              className="px-3.5 py-2 bg-[#714B67] hover:bg-[#5E3F56] disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-lg font-bold text-xs uppercase shadow-xs transition-colors"
             >
-              SAVE BIN
+              {savingShelf ? 'SAVING...' : 'SAVE BIN'}
             </button>
           </div>
         </div>
@@ -149,15 +185,22 @@ export const PackageDetailModal: React.FC<PackageDetailModalProps> = ({
           </button>
 
           <button
-            onClick={() => onToggleDamage(pkg.id)}
-            className={`flex-1 py-2.5 rounded-xl font-bold text-xs uppercase border flex items-center justify-center gap-1.5 transition-colors ${
+            onClick={handleToggleDamageClick}
+            disabled={togglingDamage}
+            className={`flex-1 py-2.5 rounded-xl font-bold text-xs uppercase border flex items-center justify-center gap-1.5 transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
               pkg.status === 'DAMAGED'
                 ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
                 : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
             }`}
           >
             <AlertTriangle size={14} />
-            <span>{pkg.status === 'DAMAGED' ? 'CLEAR DAMAGE FLAG' : 'FLAG DAMAGED'}</span>
+            <span>
+              {togglingDamage
+                ? 'UPDATING...'
+                : pkg.status === 'DAMAGED'
+                ? 'CLEAR DAMAGE FLAG'
+                : 'FLAG DAMAGED'}
+            </span>
           </button>
         </div>
       </div>

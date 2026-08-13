@@ -32,16 +32,14 @@ self.addEventListener('activate', (event) => {
 
 // Fetch Event - Stale-while-revalidate for offline access
 self.addEventListener('fetch', (event) => {
-  // Ignore API calls from caching, handle network first for API
+  // API calls are always network-first and never cached or faked here.
+  // There is no offline queue on the client (that was removed) — a failed
+  // API fetch must propagate as a real failure so odooCall()'s own error
+  // handling in the page surfaces it to the operator, rather than this
+  // service worker manufacturing a fake {offline:true} "queued" response
+  // for a write that was never actually queued or persisted anywhere.
   if (event.request.url.includes('/api/')) {
-    event.respondWith(
-      fetch(event.request).catch(() => {
-        return new Response(
-          JSON.stringify({ offline: true, message: 'Queued locally in PWA database' }),
-          { headers: { 'Content-Type': 'application/json' } }
-        );
-      })
-    );
+    event.respondWith(fetch(event.request));
     return;
   }
 
