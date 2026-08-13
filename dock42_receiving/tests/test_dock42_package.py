@@ -147,3 +147,44 @@ class TestDock42PackageCapture(TransactionCase):
         self.assertEqual(feed[0]['item_name'], 'Second')
         self.assertIn('vendor', feed[0])
         self.assertIn('state', feed[0])
+
+    def test_feed_includes_create_date(self):
+        Package = self.env['dock42.package']
+        Package.pwa_create_capture({'capture_uuid': 'uuid-feed-date-1', 'vendor': 'A', 'item_name': 'First'})
+        feed = Package.pwa_feed(limit=1)
+        self.assertIn('create_date', feed[0])
+        self.assertTrue(feed[0]['create_date'])
+        # Must be a real ISO-parseable timestamp, not a blank placeholder.
+        from datetime import datetime
+        datetime.fromisoformat(feed[0]['create_date'])
+
+    def test_initial_damaged_flag_sets_damaged_state_and_notes_on_create(self):
+        Package = self.env['dock42.package']
+        result = Package.pwa_create_capture({
+            'capture_uuid': 'uuid-initial-damaged-1',
+            'vendor': 'Acme',
+            'item_name': 'Widget',
+            'initial_damaged': True,
+            'notes': 'AI flagged: crushed corner on arrival.',
+        })
+        record = Package.browse(result['id'])
+        self.assertEqual(record.state, 'damaged')
+        self.assertEqual(record.damage_notes, 'AI flagged: crushed corner on arrival.')
+
+    def test_report_damage_persists_fields_and_marks_damaged(self):
+        Package = self.env['dock42.package']
+        created = Package.pwa_create_capture({
+            'capture_uuid': 'uuid-report-damage-1', 'vendor': 'Acme', 'item_name': 'Widget',
+        })
+        record = Package.browse(created['id'])
+        result = record.pwa_report_damage('crushed_box', 'major', 'Box crushed in transit.')
+        self.assertTrue(result['ok'])
+        self.assertEqual(record.state, 'damaged')
+        self.assertEqual(record.damage_category, 'crushed_box')
+        self.assertEqual(record.damage_severity, 'major')
+        self.assertEqual(record.damage_notes, 'Box crushed in transit.')
+        # An audit trail message must actually have been posted — this is
+        # the real persisted action the FlagView UI claims happened.
+        self.assertTrue(
+            any('Damage reported via Dock 42 PWA' in (m.body or '') for m in record.message_ids)
+        )

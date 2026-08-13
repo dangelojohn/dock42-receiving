@@ -66,8 +66,17 @@ class Dock42PWA(http.Controller):
     def dock42_app(self, **kw):
         if not _is_operator():
             return request.redirect('/web/login?redirect=%2Fdock42')
-        with open(_PWA_INDEX, 'r') as f:
-            html = f.read()
+        try:
+            with open(_PWA_INDEX, 'r') as f:
+                html = f.read()
+        except FileNotFoundError:
+            return request.make_response(
+                'Dock 42 Receiving: frontend not built.\n\n'
+                'Run `npm ci && npm run build` in the `frontend/` directory '
+                'of this module, then reload this page.',
+                status=503,
+                headers=[('Content-Type', 'text/plain; charset=utf-8')],
+            )
         return request.make_response(html, headers=[
             ('Content-Type', 'text/html; charset=utf-8'),
             ('Cache-Control', 'no-store'),
@@ -102,6 +111,18 @@ class Dock42PWA(http.Controller):
         if not record.exists():
             return {'ok': False}
         return record.pwa_toggle_flag()
+
+    @http.route('/dock42/api/report_damage', type='jsonrpc', auth='user', methods=['POST'])
+    def report_damage(self, package_id=None, category=None, severity=None, notes=None, photo=None, **kw):
+        if not _is_operator():
+            raise AccessError('Please sign in with an operator account.')
+        try:
+            record = request.env['dock42.package'].browse(int(package_id))
+        except (TypeError, ValueError):
+            return {'ok': False}
+        if not record.exists():
+            return {'ok': False}
+        return record.pwa_report_damage(category, severity, notes, photo)
 
     @http.route('/dock42/api/feed', type='jsonrpc', auth='user')
     def feed(self, limit=25, **kw):

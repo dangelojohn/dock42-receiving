@@ -71,11 +71,16 @@ class Dock42Package(models.Model):
         create_vals = {
             'capture_uuid': uuid or False,
             'captured_by': self.env.user.id,
-            'state': 'shelf_pending',
+            'state': 'damaged' if vals.get('initial_damaged') else 'shelf_pending',
         }
         for key in ('po_number', 'vendor', 'item_name', 'shelf_location'):
             if vals.get(key):
                 create_vals[key] = vals[key]
+        if vals.get('notes'):
+            # The only free-text note field on this model today is
+            # damage_notes; an AI-flagged-damaged capture's receiving-
+            # condition note lands here so it isn't silently discarded.
+            create_vals['damage_notes'] = vals['notes']
         if 'weight_kg' in vals and vals['weight_kg'] is not None:
             try:
                 create_vals['weight_kg'] = float(vals['weight_kg'])
@@ -120,6 +125,26 @@ class Dock42Package(models.Model):
         self.message_post(body='Shelf bin updated via Dock 42 PWA by %s.' % self.env.user.name)
         return {'ok': True}
 
+    def pwa_report_damage(self, category, severity, notes, photo=None):
+        """Persist a damage report for this record — writes the damage
+        fields, marks the record damaged, and posts an audit note. This is
+        the real write the FlagView UI claims happens; nothing about a
+        submit here may be shown to the operator as filed until this
+        method has actually run and returned.
+        """
+        self.ensure_one()
+        vals = {
+            'state': 'damaged',
+            'damage_category': category or False,
+            'damage_severity': severity or False,
+            'damage_notes': notes or False,
+        }
+        if photo:
+            vals['photo_package'] = self._strip_b64(photo)
+        self.write(vals)
+        self.message_post(body='Damage reported via Dock 42 PWA by %s.' % self.env.user.name)
+        return {'ok': True}
+
     def pwa_toggle_flag(self):
         """Toggle the damaged state on this record."""
         self.ensure_one()
@@ -145,4 +170,8 @@ class Dock42Package(models.Model):
             'shelf_location': r.shelf_location or '',
             'state': r.state,
             'captured_by': r.captured_by.name if r.captured_by else '',
+            # Naive UTC ISO string (Odoo stores/returns create_date in UTC).
+            # The frontend appends 'Z' before parsing so it renders in the
+            # operator's local time instead of being misread as local-time.
+            'create_date': r.create_date.isoformat() if r.create_date else '',
         } for r in records]
