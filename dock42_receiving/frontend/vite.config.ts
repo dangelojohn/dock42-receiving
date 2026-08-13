@@ -1,22 +1,26 @@
-import tailwindcss from '@tailwindcss/vite';
+import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import path from 'path';
-import {defineConfig} from 'vite';
+import tailwindcss from '@tailwindcss/vite';
 
-export default defineConfig(() => {
-  return {
-    plugins: [react(), tailwindcss()],
-    resolve: {
-      alias: {
-        '@': path.resolve(__dirname, '.'),
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  // The built bundle is served from Odoo's module-namespaced static path,
+  // not from the domain root — the app shell itself is served at /dock42
+  // by the controller, but its JS/CSS live under the addon's static
+  // folder. Without this, the emitted <script>/<link> tags reference
+  // root-absolute /assets/... paths that 404 under Odoo's static routing
+  // (module assets are only served at /<module>/static/<path>).
+  base: '/dock42_receiving/static/src/pwa/',
+  build: {
+    outDir: '../static/src/pwa',
+    emptyOutDir: true,
+  },
+  server: {
+    proxy: {
+      '/dock42/api': {
+        target: 'http://localhost:8269',
+        changeOrigin: true,
       },
     },
-    server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
-      hmr: process.env.DISABLE_HMR !== 'true',
-      // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
-      watch: process.env.DISABLE_HMR === 'true' ? null : {},
-    },
-  };
+  },
 });

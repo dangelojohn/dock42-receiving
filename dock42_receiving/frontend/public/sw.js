@@ -1,9 +1,8 @@
 // DOCK-42 RECEIVING - Odoo v19 CE PWA Service Worker
 const CACHE_NAME = 'dock42-v1.0.0';
 const ASSETS_TO_CACHE = [
-  '/',
-  '/index.html',
-  '/manifest.json'
+  '/dock42',
+  '/manifest.json',
 ];
 
 // Install Event
