@@ -962,6 +962,39 @@ export const CameraViewfinder = forwardRef<CameraViewfinderHandle, CameraViewfin
 }, ref) => {
 ```
 
+**Also fix the double-tap guard's timing (finding #8), in this same step —
+found by Task 6's own review, not a separate task:** the original
+`handleTriggerScan` starts with `if (isScanningAI) return;`, reading the
+`isScanningAI` *prop* passed down from `App`. That prop only becomes `true`
+inside `App.handleCaptureScan`, which fires *after* this function's own
+`fetch('/api/scan-label', ...)` already resolves — so for the entire
+in-flight network request, the actual window a double-tap lands in, the
+guard reads a stale `false` and does nothing. Replace that line with a
+local, synchronous ref that isn't dependent on the parent's async state
+timing at all:
+
+```tsx
+  const isCapturingRef = useRef(false);
+
+  const handleTriggerScan = async () => {
+    if (isCapturingRef.current) return;
+    isCapturingRef.current = true;
+    try {
+      // ...existing body of handleTriggerScan, unchanged...
+    } finally {
+      isCapturingRef.current = false;
+    }
+  };
+```
+Declare `isCapturingRef` once, above `handleTriggerScan`, alongside the
+component's other `useRef` declarations (`videoRef`, `fileInputRef`). Wrap
+the existing function body in the `try`/`finally` shown — do not change any
+of the logic inside it, only add the ref check at the top and the
+try/finally around what's already there. This makes the guard synchronous
+and immediate: `isCapturingRef.current` flips `true` before any `await`, so
+a second tap during the fetch is blocked regardless of when React re-renders
+or when the parent's `isScanningAI` state eventually updates.
+
 Add, right after the `handleTriggerScan` function definition (after the
 closing brace that currently ends around line 110), before
 `handleFileUpload`:
