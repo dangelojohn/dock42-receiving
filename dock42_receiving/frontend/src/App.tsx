@@ -192,8 +192,15 @@ export default function App() {
     // row server-side.
     if (!captureUuidRef.current) captureUuidRef.current = generateUuid();
     const captureUuid = captureUuidRef.current;
+    // The write and the follow-up refresh are deliberately in separate
+    // try/catch blocks: if the write succeeds but refreshFeed() then fails
+    // (e.g. a flaky connection right after a good POST), that must NOT be
+    // reported to the operator as a failed capture — a false "failed"
+    // banner here previously led an operator to retry a write that had
+    // already landed.
+    let response: { id: number; duplicate: boolean };
     try {
-      await odooCall<{ id: number; duplicate: boolean }>('/dock42/api/capture', {
+      response = await odooCall<{ id: number; duplicate: boolean }>('/dock42/api/capture', {
         capture_uuid: captureUuid,
         po_number: scannedData?.poNumber,
         vendor: scannedData?.vendor ?? 'Unknown Vendor',
@@ -206,24 +213,57 @@ export default function App() {
         // undamaged with no trace of what the scan actually found.
         initial_damaged: scannedData?.status === 'DAMAGED',
       });
-      // Confirmed success — the next capture attempt gets a fresh uuid.
-      captureUuidRef.current = null;
-      // Re-fetch the feed so local state always reflects server truth,
-      // rather than optimistically constructing a local record that could
-      // diverge from what the server actually stored.
-      await refreshFeed();
-      triggerLocalPushNotification(
-        'Package Scanned & Logged',
-        `Recorded at ${currentLocation.code}`
-      );
-      setErrorBanner(null);
-      setCurrentStep('SHELF');
     } catch (e) {
       console.warn('Capture failed:', e);
       triggerLocalPushNotification('Capture Failed', String(e));
       setErrorBanner(`Capture failed: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
       setIsScanningAI(false);
+      return;
+    }
+    setIsScanningAI(false);
+
+    if (response.duplicate) {
+      // The server matched captureUuid to a record that already exists
+      // instead of creating a new one. That's the CORRECT, safe outcome
+      // for a genuine retry of the same capture (e.g. the client never saw
+      // the first response, so the ref was never cleared, and this resend
+      // lands on the same row) — but it's indistinguishable, from here,
+      // from an operator who abandoned that capture and scanned a
+      // *different* physical package next while the stale ref was still
+      // set. Silently treating both cases as a normal success would
+      // discard the second package's data with no visible signal. Rather
+      // than guess intent, surface it and require the operator to notice:
+      // don't clear captureUuidRef (so a genuine resend of the SAME item
+      // stays deduped), and don't advance to the SHELF step or claim a
+      // fresh capture succeeded.
+      triggerLocalPushNotification(
+        'Duplicate Scan Detected',
+        'Matched an existing record — check the feed before scanning the next item.'
+      );
+      setErrorBanner(
+        'This scan matched an existing record instead of creating a new one — check the feed before scanning the next item.'
+      );
+      return;
+    }
+
+    // Confirmed a genuinely new row was created — the next capture attempt
+    // gets a fresh uuid.
+    captureUuidRef.current = null;
+    triggerLocalPushNotification(
+      'Package Scanned & Logged',
+      `Recorded at ${currentLocation.code}`
+    );
+    setErrorBanner(null);
+    setCurrentStep('SHELF');
+
+    try {
+      // Re-fetch the feed so local state always reflects server truth,
+      // rather than optimistically constructing a local record that could
+      // diverge from what the server actually stored.
+      await refreshFeed();
+    } catch (e) {
+      console.warn('Post-capture refresh failed:', e);
+      setErrorBanner(`Package captured, but refreshing the list failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -233,6 +273,9 @@ export default function App() {
   const handleAddPackage = async (newPkg: PackageItem) => {
     if (!addPackageUuidRef.current) addPackageUuidRef.current = generateUuid();
     const captureUuid = addPackageUuidRef.current;
+    // Write and refresh live in separate try/catch blocks — see
+    // handleCaptureScan above for why a refresh failure must never be
+    // reported as if the write itself failed.
     try {
       await odooCall('/dock42/api/capture', {
         capture_uuid: captureUuid,
@@ -242,13 +285,19 @@ export default function App() {
         weight_kg: newPkg.weightKg,
         shelf_location: newPkg.shelfLocation,
       });
-      addPackageUuidRef.current = null;
-      await refreshFeed();
-      setErrorBanner(null);
     } catch (e) {
       console.warn('Manual package add failed:', e);
       triggerLocalPushNotification('Manual Entry Failed', String(e));
       setErrorBanner(`Manual entry failed: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    addPackageUuidRef.current = null;
+    try {
+      await refreshFeed();
+      setErrorBanner(null);
+    } catch (e) {
+      console.warn('Manual package add refresh failed:', e);
+      setErrorBanner(`Package added, but refreshing the list failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -256,6 +305,9 @@ export default function App() {
   // Returns whether it actually succeeded so callers (PackageDetailModal)
   // can gate their own success UI on a real result instead of assuming.
   const handleUpdateShelf = async (pkgId: string, newShelf: string): Promise<boolean> => {
+    // Write and refresh live in separate try/catch blocks — a refresh
+    // failure after a successful write must not be reported to the
+    // operator as the write itself having failed (see handleCaptureScan).
     try {
       const result = await odooCall<{ ok: boolean }>('/dock42/api/update_shelf', {
         package_id: Number(pkgId),
@@ -264,6 +316,12 @@ export default function App() {
       if (!result?.ok) {
         throw new Error('Odoo rejected the shelf update.');
       }
+    } catch (e) {
+      console.warn('Shelf update failed:', e);
+      setErrorBanner(`Shelf update failed: ${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    }
+    try {
       const fresh = await refreshFeed();
       // Re-sync the open modal's snapshot, not just the list behind it — the
       // original handlers (pre-Task-7) kept selectedPackage in sync; the
@@ -275,17 +333,21 @@ export default function App() {
         prev && prev.id === pkgId ? fresh.find((p) => p.id === pkgId) ?? prev : prev
       );
       setErrorBanner(null);
-      return true;
     } catch (e) {
-      console.warn('Shelf update failed:', e);
-      setErrorBanner(`Shelf update failed: ${e instanceof Error ? e.message : String(e)}`);
-      return false;
+      console.warn('Shelf update refresh failed:', e);
+      setErrorBanner(`Shelf updated, but refreshing the list failed: ${e instanceof Error ? e.message : String(e)}`);
     }
+    return true; // the WRITE succeeded, which is what the caller needs to know
   };
 
   // Toggle damage flag on package — actually persisted. Returns whether it
   // actually succeeded, same reasoning as handleUpdateShelf above.
   const handleToggleDamage = async (pkgId: string): Promise<boolean> => {
+    // Write and refresh live in separate try/catch blocks. Previously both
+    // were caught together, so a write that actually succeeded but whose
+    // follow-up refreshFeed() failed was reported to the operator as a
+    // failed toggle — an operator retrying off that false error flipped an
+    // already-toggled damage flag right back off.
     try {
       const result = await odooCall<{ ok: boolean; flagged: boolean }>('/dock42/api/flag_damage', {
         package_id: Number(pkgId),
@@ -293,17 +355,22 @@ export default function App() {
       if (!result?.ok) {
         throw new Error('Odoo rejected the damage flag toggle.');
       }
-      const fresh = await refreshFeed();
-      setSelectedPackage((prev) =>
-        prev && prev.id === pkgId ? fresh.find((p) => p.id === pkgId) ?? prev : prev
-      );
-      setErrorBanner(null);
-      return true;
     } catch (e) {
       console.warn('Damage flag toggle failed:', e);
       setErrorBanner(`Damage flag toggle failed: ${e instanceof Error ? e.message : String(e)}`);
       return false;
     }
+    try {
+      const fresh = await refreshFeed();
+      setSelectedPackage((prev) =>
+        prev && prev.id === pkgId ? fresh.find((p) => p.id === pkgId) ?? prev : prev
+      );
+      setErrorBanner(null);
+    } catch (e) {
+      console.warn('Damage flag toggle refresh failed:', e);
+      setErrorBanner(`Damage flag updated, but refreshing the list failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    return true; // the WRITE succeeded, which is what the caller needs to know
   };
 
   // Flag damaged shipment from FlagView — actually persisted via
