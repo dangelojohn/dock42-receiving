@@ -76,10 +76,15 @@ class Dock42Package(models.Model):
         for key in ('po_number', 'vendor', 'item_name', 'shelf_location'):
             if vals.get(key):
                 create_vals[key] = vals[key]
-        if vals.get('notes'):
-            # The only free-text note field on this model today is
-            # damage_notes; an AI-flagged-damaged capture's receiving-
-            # condition note lands here so it isn't silently discarded.
+        if vals.get('notes') and vals.get('initial_damaged'):
+            # The AI returns a generic "receiving condition" note on every
+            # scan, not just damaged ones — the only free-text note field
+            # on this model today is damage_notes, so writing it
+            # unconditionally would mislabel every undamaged capture with a
+            # populated "Damage Notes" field. Only persist it when the
+            # capture is actually flagged damaged (gated the same way
+            # `state` above already is); an undamaged capture's AI note is
+            # simply not persisted.
             create_vals['damage_notes'] = vals['notes']
         if 'weight_kg' in vals and vals['weight_kg'] is not None:
             try:
@@ -137,8 +142,14 @@ class Dock42Package(models.Model):
             'state': 'damaged',
             'damage_category': category or False,
             'damage_severity': severity or False,
-            'damage_notes': notes or False,
         }
+        if notes:
+            # Only overwrite damage_notes when the operator actually typed
+            # something. Unconditionally writing `notes or False` here
+            # would silently wipe an AI-captured note from the original
+            # capture (pwa_create_capture) whenever a damage report is
+            # filed with an empty textarea.
+            vals['damage_notes'] = notes
         if photo:
             vals['photo_package'] = self._strip_b64(photo)
         self.write(vals)

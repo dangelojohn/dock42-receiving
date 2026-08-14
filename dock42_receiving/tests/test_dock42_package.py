@@ -188,3 +188,47 @@ class TestDock42PackageCapture(TransactionCase):
         self.assertTrue(
             any('Damage reported via Dock 42 PWA' in (m.body or '') for m in record.message_ids)
         )
+
+    def test_undamaged_capture_with_ai_notes_does_not_populate_damage_notes(self):
+        """The AI returns a generic "receiving condition" note on every
+        scan, not just damaged ones. Since damage_notes is the only
+        free-text field on this model, writing that note unconditionally
+        would mislabel every undamaged package with populated "Damage
+        Notes". It must only land there when the capture is actually
+        flagged damaged.
+        """
+        Package = self.env['dock42.package']
+        result = Package.pwa_create_capture({
+            'capture_uuid': 'uuid-undamaged-with-notes-1',
+            'vendor': 'Acme',
+            'item_name': 'Widget',
+            'initial_damaged': False,
+            'notes': 'AI: package received in good condition.',
+        })
+        record = Package.browse(result['id'])
+        self.assertEqual(record.state, 'shelf_pending')
+        self.assertFalse(record.damage_notes)
+
+    def test_report_damage_with_empty_notes_does_not_wipe_existing_damage_notes(self):
+        """Filing a damage report with an empty textarea must not blank out
+        a damage_notes value the original AI-flagged capture already wrote
+        (pwa_create_capture with initial_damaged=True). Only overwrite
+        damage_notes when the operator actually typed something.
+        """
+        Package = self.env['dock42.package']
+        created = Package.pwa_create_capture({
+            'capture_uuid': 'uuid-report-damage-empty-notes-1',
+            'vendor': 'Acme',
+            'item_name': 'Widget',
+            'initial_damaged': True,
+            'notes': 'AI flagged: dented corner on arrival.',
+        })
+        record = Package.browse(created['id'])
+        self.assertEqual(record.damage_notes, 'AI flagged: dented corner on arrival.')
+
+        result = record.pwa_report_damage('crushed_box', 'major', '')
+        self.assertTrue(result['ok'])
+        self.assertEqual(record.state, 'damaged')
+        self.assertEqual(record.damage_category, 'crushed_box')
+        # The pre-existing AI note must survive an empty-textarea submit.
+        self.assertEqual(record.damage_notes, 'AI flagged: dented corner on arrival.')
